@@ -320,5 +320,5 @@ app.post("/cache/clear", (req, res) => {
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
 
 app.listen(CONFIG.PORT, "0.0.0.0", () => {
-  console.log(`\n🚀 Fusion Dizipal Addon v1.0.5 -> http://0.0.0.0:${CONFIG.PORT}`);
+  console.log(`\n🚀 Fusion Dizipal Addon v1.0.6 -> http://0.0.0.0:${CONFIG.PORT}`);
 });
