@@ -50,6 +50,7 @@ schema:
   cache_ttl_hours: int(1,72)
   headless: bool
   timeout_ms: int(5000,60000)
+  addon_url: str
 
 # ── Capabilities ──────────────────────────────────────────────────────────────
 # Chromium needs these even inside Docker on HAOS.
