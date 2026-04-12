@@ -1,16 +1,10 @@
 {
-  "id": "com.fusionaddon.dizipal",
+  "id": "fusion.dizipal.clean",
   "name": "Dizipal",
-  "version": "1.0.0",
-  "description": "dizipal.im üzerindeki dizi ve filmleri Fusion'da izleyin.",
-  "logo": "https://dizipal.im/favicon.ico",
-  "resources": [
-    {
-      "name": "stream",
-      "types": ["movie", "series"],
-      "idPrefixes": ["tt", "dizipal"]
-    }
-  ],
+  "version": "1.3.0",
+  "description": "Dizipal içeriklerini 1080p kalitesinde izleyin.",
+  "logo": "https://raw.githubusercontent.com/dzirambola/fusion-dizipal-addon/main/fusion_dizipal/image_0.png",
+  "resources": ["stream"],
   "types": ["movie", "series"],
   "idPrefixes": ["tt", "dizipal"],
   "catalogs": [],
