@@ -284,18 +284,15 @@ app.get("/stream/:type/:encodedId.json", async (req, res) => {
     const m3u8Url = await scrapeM3U8(dizipalUrl);
 
     // M3U8'i proxy üzerinden sun
-    const proxyUrl = `${CONFIG.ADDON_URL}/proxy/m3u8?url=${encodeURIComponent(m3u8Url)}`;
-    console.log(`[stream] Proxy URL: ${proxyUrl}`);
-
-    res.json({
-      streams: [{
-        url: proxyUrl,
-        title: "Dizipal",
-        name: "HLS · M3U8",
-        description: "dizipal.im",
-        behaviorHints: { bingeGroup: "dizipal" },
-      }],
-    });
+res.json({
+  streams: [{
+    url: m3u8Url,
+    title: "Dizipal",
+    name: "HLS · M3U8",
+    description: "dizipal.im",
+    behaviorHints: { bingeGroup: "dizipal" },
+  }],
+});
   } catch (err) {
     console.error("[stream] Hata:", err.message);
     res.json({ streams: [] });
