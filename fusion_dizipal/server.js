@@ -1,6 +1,6 @@
 "use strict";
 /**
- * Fusion Dizipal Addon - v1.3.1
+ * Fusion Dizipal Addon - v1.3.2
  * Format: [Adı] [SxxExx] · [Çözünürlük]
  */
 
