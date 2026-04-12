@@ -1,9 +1,11 @@
+# ── 1. Temel İmaj ───────────────────────────────────────────────────────────
 FROM debian:bullseye-slim
 
-LABEL maintainer="fusion-addon"
-LABEL description="Fusion Media Center – Dizipal Scraper Addon (ARM64)"
+LABEL maintainer="dzirambola"
+LABEL description="Dizipal Fusion Scraper Addon - 1080p Optimized"
 
-# ── Node.js 18 LTS (NodeSource) + Chromium + sistem kütüphaneleri ─────────────
+# ── 2. Bağımlılıkların Kurulumu ──────────────────────────────────────────────
+# Node.js, Chromium ve Puppeteer için gerekli sistem kütüphaneleri
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
@@ -30,23 +32,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Non-root kullanıcı ────────────────────────────────────────────────────────
-RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
-    && mkdir -p /home/pptruser \
-    && chown -R pptruser:pptruser /home/pptruser
-
-# ── Uygulama ──────────────────────────────────────────────────────────────────
+# ── 3. Uygulama Dizin Yapısı ────────────────────────────────────────────────
 WORKDIR /app
-COPY package.json ./
-RUN npm install --omit=dev
-COPY server.js ./
-COPY manifest.json ./
-RUN chown -R pptruser:pptruser /app
 
-USER pptruser
+# Sadece package.json kopyalayarak bağımlılıkları yükle (Docker cache avantajı)
+COPY package.json .
+RUN npm install --production
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD curl -sf http://localhost:7860/manifest.json || exit 1
+# Uygulama dosyalarını kopyala
+COPY . .
 
+# ── 4. Güvenlik ve İzinler ──────────────────────────────────────────────────
+# Puppeteer'ın sandbox modunda sorunsuz çalışması için izinler
+RUN chmod -R 777 /app
+
+# ── 5. Sağlık Kontrolü (Healthcheck) ────────────────────────────────────────
+# Eklentinin çalışıp çalışmadığını her 30 saniyede bir kontrol eder
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:7860/health || exit 1
+
+# ── 6. Başlatma ─────────────────────────────────────────────────────────────
 EXPOSE 7860
+
 CMD ["node", "server.js"]
