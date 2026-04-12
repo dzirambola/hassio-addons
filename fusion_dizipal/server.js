@@ -1,9 +1,11 @@
 "use strict";
-// Fusion Dizipal Addon - v1.2.8 (Arayüz Düzenleme & Log Güncelleme)
+/**
+ * Fusion Dizipal Addon - v1.2.9
+ * Özellikler: GitHub Logo, Temiz Arayüz, Proxy Desteği ve Dinamik Başlıklar
+ */
 
 const express = require("express");
 const fs = require("fs");
-const path = require("path");
 const https = require("https");
 const http = require("http");
 const puppeteer = require("puppeteer-extra");
@@ -11,23 +13,24 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 
 puppeteer.use(StealthPlugin());
 
-// ── Yapılandırma ─────────────────────────────────────────────────────────────
+// ── 1. Yapılandırma ──────────────────────────────────────────────────────────
 const opts = (() => {
   try { return fs.existsSync("/data/options.json") ? JSON.parse(fs.readFileSync("/data/options.json", "utf8")) : {}; } catch (e) { return {}; }
 })();
 
 const CONFIG = {
-  VERSION: "1.2.8",
+  VERSION: "1.2.9",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: 45000,
   CHROMIUM_PATH: "/usr/bin/chromium",
-  UA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+  UA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  LOGO_URL: "https://raw.githubusercontent.com/dzirambola/fusion-dizipal-addon/main/fusion_dizipal/image_0.png"
 };
 
 const app = express();
 
-// Cache
+// Cache Mekanizması
 const cache = new Map();
 const cacheSet = (key, val) => cache.set(key, { v: val, t: Date.now() });
 const cacheGet = (key, ttl) => {
@@ -36,7 +39,7 @@ const cacheGet = (key, ttl) => {
   return e.v;
 };
 
-// ── Yardımcı Fonksiyonlar ────────────────────────────────────────────────────
+// ── 2. Yardımcı Fonksiyonlar ────────────────────────────────────────────────────
 function toSlug(title) {
   return title.toLowerCase()
     .replace(/ğ/g,"g").replace(/ü/g,"u").replace(/ş/g,"s")
@@ -58,7 +61,7 @@ async function fetchTitle(imdbId) {
   });
 }
 
-// ── Scraper ───────────────────────────────────────────────────────────────────
+// ── 3. Scraper (m3u8 Yakalayıcı) ──────────────────────────────────────────────
 async function scrapeM3U8(pageUrl) {
   const cached = cacheGet(`m3u8:${pageUrl}`, 12 * 60 * 60 * 1000);
   if (cached) return cached;
@@ -94,7 +97,7 @@ async function scrapeM3U8(pageUrl) {
   } finally { await browser.close(); }
 }
 
-// ── Proxy ─────────────────────────────────────────────────────────────────────
+// ── 4. Proxy (Apple TV İçin Akış Tüneli) ──────────────────────────────────────
 app.get("/proxy-stream", (req, res) => {
   const targetUrl = req.query.url;
   if (!targetUrl) return res.sendStatus(400);
@@ -106,12 +109,13 @@ app.get("/proxy-stream", (req, res) => {
   pReq.on('error', () => res.sendStatus(500));
 });
 
-// ── Stremio Routes ────────────────────────────────────────────────────────────
+// ── 5. Stremio/Fusion Route'ları ───────────────────────────────────────────────
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "fusion.dizipal.clean",
     name: "Dizipal",
     version: CONFIG.VERSION,
+    logo: CONFIG.LOGO_URL,
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"]
@@ -128,12 +132,12 @@ app.get("/stream/:type/:id.json", async (req, res) => {
 
     if (epMatch) { 
       title = await fetchTitle(epMatch[1]);
-      if (!title) throw new Error("Başlık çekilemedi");
+      if (!title) throw new Error("Başlık bulunamadı");
       dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
       streamTitle = `${title} S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')}`;
     } else { 
       title = await fetchTitle(cleanId);
-      if (!title) throw new Error("Başlık çekilemedi");
+      if (!title) throw new Error("Başlık bulunamadı");
       dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
       streamTitle = title;
     }
@@ -158,6 +162,7 @@ app.get("/stream/:type/:id.json", async (req, res) => {
   }
 });
 
+// CORS Ayarları
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   next();
