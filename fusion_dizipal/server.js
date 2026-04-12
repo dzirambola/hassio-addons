@@ -1,5 +1,5 @@
 "use strict";
-// Fusion Dizipal Addon - v1.0.9 (Apple TV Optimized)
+// Fusion Dizipal Addon - v1.1.0 (No-Dependency CORS & Apple TV Fix)
 
 const express = require("express");
 const fs = require("fs");
@@ -7,7 +7,6 @@ const path = require("path");
 const https = require("https");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
-const cors = require("cors");
 
 puppeteer.use(StealthPlugin());
 
@@ -146,7 +145,6 @@ async function scrapeM3U8(pageUrl) {
 
       try {
         await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
-        // iframe içine bak
         const iframeSrc = await page.evaluate(() => {
           const el = document.querySelector('iframe[src*="player"], iframe[src*="embed"], iframe');
           return el ? el.src : null;
@@ -154,7 +152,7 @@ async function scrapeM3U8(pageUrl) {
         if (iframeSrc && !iframeSrc.startsWith("about")) {
           await page.goto(iframeSrc, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
         }
-        await new Promise(r => setTimeout(r, 5000)); // Bekleme süresini biraz kısalttık
+        await new Promise(r => setTimeout(r, 6000));
       } catch (e) {}
     });
 
@@ -167,29 +165,51 @@ async function scrapeM3U8(pageUrl) {
 
 // ── Express Sunucu ────────────────────────────────────────────────────────────
 const app = express();
-app.use(cors()); // Global CORS desteği
+
+// MANUEL CORS AYARI (cors paketine ihtiyaç duymaz)
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 app.get("/manifest.json", (req, res) => {
-  res.sendFile(path.join(__dirname, "manifest.json"));
+  const manifestPath = path.join(__dirname, "manifest.json");
+  if (fs.existsSync(manifestPath)) {
+    res.sendFile(manifestPath);
+  } else {
+    res.json({
+      id: "fusion.dizipal.addon",
+      name: "Dizipal Fusion",
+      description: "Apple TV Optimized Dizipal Addon",
+      version: "1.1.0",
+      resources: ["stream"],
+      types: ["movie", "series"],
+      idPrefixes: ["tt"]
+    });
+  }
 });
 
 app.get("/stream/:type/:id.json", async (req, res) => {
   const { type, id } = req.params;
-  console.log(`[Request] ${type} - ${id}`);
+  const cleanId = id.replace(".json", "");
 
   try {
     let dizipalUrl;
-    const epMatch = id.match(/^(tt\d+):(\d+):(\d+)$/);
+    const epMatch = cleanId.match(/^(tt\d+):(\d+):(\d+)$/);
 
     if (epMatch) {
       dizipalUrl = await findDizipalUrl(epMatch[1], "series", epMatch[2], epMatch[3]);
     } else {
-      dizipalUrl = await findDizipalUrl(id.replace(".json", ""), type);
+      dizipalUrl = await findDizipalUrl(cleanId, type);
     }
 
     const m3u8Url = await scrapeM3U8(dizipalUrl);
 
-    // Apple TV / Fusion Player için kritik dönüt yapısı
     res.json({
       streams: [{
         name: "Dizipal · HLS",
@@ -215,5 +235,5 @@ app.get("/stream/:type/:id.json", async (req, res) => {
 });
 
 app.listen(CONFIG.PORT, "0.0.0.0", () => {
-  console.log(`🚀 Addon hazır: v109 http://localhost:${CONFIG.PORT}`);
+  console.log(`🚀 Sunucu Çalışıyor: 110 http://0.0.0.0:${CONFIG.PORT}`);
 });
