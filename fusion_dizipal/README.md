@@ -18,6 +18,3 @@ Eklentiyi başlattıktan sonra, Fusion veya Stremio'ya eklemeniz gereken Manifes
 `http://HOME_ASSISTANT_IP:7860/manifest.json`
 
 *(Not: `HOME_ASSISTANT_IP` kısmını kendi Home Assistant cihazınızın IP'si ile değiştirin, örneğin `http://192.168.1.50:7860/manifest.json`)*
-
----
-*(Geri kalan teknik detaylar aşağıda kalabilir)*
