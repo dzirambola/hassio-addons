@@ -1,8 +1,5 @@
 "use strict";
-/**
- * Fusion Dizipal Addon - v1.2.5
- * Home Assistant & Apple TV (Fusion/Infuse) Optimized
- */
+// Fusion Dizipal Addon - v1.2.6 (Dinamik ID & Proxy Fix)
 
 const express = require("express");
 const fs = require("fs");
@@ -14,11 +11,9 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 
 puppeteer.use(StealthPlugin());
 
-// ── 1. Yapılandırma ──────────────────────────────────────────────────────────
+// ── Yapılandırma ─────────────────────────────────────────────────────────────
 const opts = (() => {
-  try {
-    return fs.existsSync("/data/options.json") ? JSON.parse(fs.readFileSync("/data/options.json", "utf8")) : {};
-  } catch (e) { return {}; }
+  try { return fs.existsSync("/data/options.json") ? JSON.parse(fs.readFileSync("/data/options.json", "utf8")) : {}; } catch (e) { return {}; }
 })();
 
 const CONFIG = {
@@ -31,151 +26,142 @@ const CONFIG = {
 
 const app = express();
 
-// ── 2. Manuel CORS & Pre-flight ──────────────────────────────────────────────
-app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "*");
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
+// Cache Mekanizması
+const cache = new Map();
+const cacheSet = (key, val) => cache.set(key, { v: val, t: Date.now() });
+const cacheGet = (key, ttl) => {
+  const e = cache.get(key);
+  if (!e || (Date.now() - e.t > ttl)) return null;
+  return e.v;
+};
 
-// ── 3. Stream Proxy (Vekil Sunucu) ───────────────────────────────────────────
-// Apple TV'nin videoyu doğrudan çekemediği durumlarda trafiği tüneller
-app.get("/proxy-stream", (req, res) => {
-  const targetUrl = req.query.url;
-  if (!targetUrl) return res.status(400).send("No URL");
+// ── Yardımcı Fonksiyonlar ────────────────────────────────────────────────────
+function toSlug(title) {
+  return title.toLowerCase()
+    .replace(/ğ/g,"g").replace(/ü/g,"u").replace(/ş/g,"s")
+    .replace(/ı/g,"i").replace(/ö/g,"o").replace(/ç/g,"c")
+    .replace(/[^a-z0-9\s-]/g,"").trim().replace(/\s+/g,"-");
+}
 
-  const parsedUrl = new URL(targetUrl);
-  const options = {
-    headers: {
-      "User-Agent": CONFIG.UA,
-      "Referer": CONFIG.BASE_URL + "/",
-      "Origin": CONFIG.BASE_URL
-    },
-    timeout: 10000
-  };
-
-  const proxyReq = (parsedUrl.protocol === 'https:' ? https : http).get(targetUrl, options, (proxyRes) => {
-    // Sunucudan gelen tüm başlıkları (Content-Type vb.) oynatıcıya ilet
-    res.writeHead(proxyRes.statusCode, proxyRes.headers);
-    proxyRes.pipe(res);
+async function fetchTitle(imdbId) {
+  const cached = cacheGet(`title:${imdbId}`, 7 * 24 * 60 * 60 * 1000);
+  if (cached) return cached;
+  return new Promise((resolve) => {
+    https.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=trilogy`, (res) => {
+      let d = ""; res.on("data", (c) => d += c);
+      res.on("end", () => {
+        try { const j = JSON.parse(d); if (j.Title) { cacheSet(`title:${imdbId}`, j.Title); resolve(j.Title); } else resolve(null); }
+        catch (e) { resolve(null); }
+      });
+    }).on("error", () => resolve(null));
   });
+}
 
-  proxyReq.on('error', (err) => {
-    console.error("[Proxy Error]", err.message);
-    res.status(500).send("Proxy Error");
-  });
-});
-
-// ── 4. Puppeteer Scraper ─────────────────────────────────────────────────────
+// ── Scraper ───────────────────────────────────────────────────────────────────
 async function scrapeM3U8(pageUrl) {
+  const cached = cacheGet(`m3u8:${pageUrl}`, 12 * 60 * 60 * 1000);
+  if (cached) return cached;
+
   const browser = await puppeteer.launch({
     executablePath: CONFIG.CHROMIUM_PATH,
     headless: "new",
-    args: [
-      "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
-      "--no-zygote", "--single-process", "--disable-gpu"
-    ]
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote"]
   });
 
   try {
     const page = await browser.newPage();
-    await page.setUserAgent(CONFIG.UA);
     await page.setExtraHTTPHeaders({ "Referer": CONFIG.BASE_URL + "/" });
     await page.setRequestInterception(true);
-
     page.on("request", (req) => {
-      const type = req.resourceType();
-      if (["image", "font", "stylesheet", "media"].includes(type)) return req.abort();
-      req.continue();
+      if (["image", "font", "stylesheet"].includes(req.resourceType())) req.abort();
+      else req.continue();
     });
 
     return await new Promise(async (resolve, reject) => {
       const t = setTimeout(() => reject(new Error("Timeout")), CONFIG.TIMEOUT_MS);
-
       page.on("request", (req) => {
-        const url = req.url();
-        if (url.includes(".m3u8")) {
-          clearTimeout(t);
-          resolve(url);
-        }
+        if (req.url().includes(".m3u8")) { clearTimeout(t); resolve(req.url()); }
       });
 
       try {
         await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
-        // player/embed iframe'lerini tara
-        const iframeSrc = await page.evaluate(() => {
-          const el = document.querySelector('iframe[src*="player"], iframe[src*="embed"]');
-          return el ? el.src : null;
-        });
-        if (iframeSrc) await page.goto(iframeSrc, { waitUntil: "domcontentloaded" });
-        await new Promise(r => setTimeout(r, 8000));
-      } catch (e) { /* Hata olsa da beklemeye devam et, m3u8 yakalanabilir */ }
+        const iframe = await page.evaluate(() => document.querySelector('iframe[src*="player"], iframe[src*="embed"]')?.src);
+        if (iframe) await page.goto(iframe, { waitUntil: "domcontentloaded" });
+        await new Promise(r => setTimeout(r, 10000)); // Sayfanın yüklenmesi için süre
+      } catch (e) {}
     });
-  } finally {
-    await browser.close();
-  }
+  } finally { await browser.close(); }
 }
 
-// ── 5. Stremio/Fusion Stream Handler ──────────────────────────────────────────
-app.get("/stream/:type/:id.json", async (req, res) => {
-  const { type, id } = req.params;
-  const cleanId = id.replace(".json", "");
-
-  try {
-    // Burada URL çözümleme mantığı (ID -> Dizipal URL)
-    let dizipalUrl = `${CONFIG.BASE_URL}/`; 
-    // Örnek: Gassal dizisi için id'den URL üretme (Geliştirilebilir)
-    if (cleanId.includes(":")) {
-      const parts = cleanId.split(":");
-      // Not: Slug üretme fonksiyonun buraya entegre edilebilir
-      dizipalUrl += `bolum/gassal-${parts[1]}-sezon-${parts[2]}-bolum-izle/`;
-    }
-
-    const rawM3u8 = await scrapeM3U8(dizipalUrl);
-    const host = req.get('host');
-    
-    // Apple TV için Proxy URL oluştur
-    const proxiedUrl = `http://${host}/proxy-stream?url=${encodeURIComponent(rawM3u8)}`;
-
-    res.json({
-      streams: [{
-        name: "Dizipal · Fusion",
-        title: "⚡ Apple TV Hızlı Kanal\n(HLS Proxy)",
-        url: proxiedUrl,
-        behaviorHints: {
-          notWebReady: true,
-          bingeGroup: "dizipal-fusion",
-          proxyHeaders: {
-            request: {
-              "User-Agent": CONFIG.UA,
-              "Referer": CONFIG.BASE_URL + "/",
-              "Origin": CONFIG.BASE_URL
-            }
-          }
-        }
-      }]
-    });
-  } catch (err) {
-    console.error("[Stream Hata]", err.message);
-    res.json({ streams: [] });
-  }
+// ── Proxy ─────────────────────────────────────────────────────────────────────
+app.get("/proxy-stream", (req, res) => {
+  const targetUrl = req.query.url;
+  if (!targetUrl) return res.sendStatus(400);
+  const options = { headers: { "User-Agent": CONFIG.UA, "Referer": CONFIG.BASE_URL + "/", "Origin": CONFIG.BASE_URL } };
+  const pReq = (targetUrl.startsWith('https') ? https : http).get(targetUrl, options, (pRes) => {
+    res.writeHead(pRes.statusCode, pRes.headers);
+    pRes.pipe(res);
+  });
+  pReq.on('error', () => res.sendStatus(500));
 });
 
-// ── 6. Manifest ──────────────────────────────────────────────────────────────
+// ── Stremio Routes ────────────────────────────────────────────────────────────
 app.get("/manifest.json", (req, res) => {
   res.json({
-    id: "fusion.dizipal.proxy",
-    name: "Dizipal Proxy",
-    description: "Home Assistant & Apple TV Optimized",
-    version: "1.2.5",
+    id: "fusion.dizipal.dynamic",
+    name: "Dizipal Fusion Pro",
+    version: "1.2.6",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"]
   });
 });
 
-app.listen(CONFIG.PORT, "0.0.0.0", () => {
-  console.log(`🚀 Fusion Addon: v125 http://localhost:${CONFIG.PORT}`);
+app.get("/stream/:type/:id.json", async (req, res) => {
+  const { type, id } = req.params;
+  const cleanId = id.replace(".json", "");
+  console.log(`[Stream] İstek: ${type} - ${cleanId}`);
+
+  try {
+    let title, dizipalUrl;
+    const epMatch = cleanId.match(/^(tt\d+):(\d+):(\d+)$/);
+
+    if (epMatch) { // Dizi
+      title = await fetchTitle(epMatch[1]);
+      if (!title) throw new Error("Title bulunamadı");
+      dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
+    } else { // Film
+      title = await fetchTitle(cleanId);
+      if (!title) throw new Error("Title bulunamadı");
+      dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
+    }
+
+    console.log(`[Stream] Dizipal URL: ${dizipalUrl}`);
+    const rawM3u8 = await scrapeM3U8(dizipalUrl);
+    const host = req.get('host');
+    const proxiedUrl = `http://${host}/proxy-stream?url=${encodeURIComponent(rawM3u8)}`;
+
+    res.json({
+      streams: [{
+        name: "Dizipal · Proxy",
+        title: `🎬 ${title}\nFusion Apple TV Mode`,
+        url: proxiedUrl,
+        behaviorHints: { 
+            notWebReady: true,
+            proxyHeaders: { request: { "User-Agent": CONFIG.UA, "Referer": CONFIG.BASE_URL + "/" } }
+        }
+      }]
+    });
+  } catch (err) {
+    console.error("[Hata]", err.message);
+    res.json({ streams: [] });
+  }
 });
+
+// CORS ayarı
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  next();
+});
+
+app.listen(CONFIG.PORT, "0.0.0.0", () => console.log(`🚀  v126 Port: ${CONFIG.PORT}`));
