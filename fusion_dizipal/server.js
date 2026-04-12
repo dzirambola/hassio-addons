@@ -1,5 +1,5 @@
 "use strict";
-// Fusion Dizipal Addon - v1.0.5
+// Fusion Dizipal Addon - v1.0.6
 
 const express = require("express");
 const fs = require("fs");
