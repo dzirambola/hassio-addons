@@ -37,12 +37,13 @@ map:
 
 # ── User-configurable options ─────────────────────────────────────────────────
 options:
-  base_url: "https://dizipal.im"    # Change when site rotates domain
+  base_url: "https://dizipal.im"
   port: 7860
-  cache_ttl_hours: 12               # Token/link cache lifetime
+  addon_url: "http://192.168.2.145:7860"
+  cache_ttl_hours: 12
   headless: true
-  timeout_ms: 30000                 # Page-load timeout
-
+  timeout_ms: 45000
+  
 schema:
   base_url: str
   port: int(1024,65535)
