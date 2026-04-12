@@ -1,4 +1,5 @@
 "use strict";
+// Fusion Dizipal Addon - v1.0.3
 
 const express = require("express");
 const fs = require("fs");
@@ -9,6 +10,7 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 
 puppeteer.use(StealthPlugin());
 
+// ── Konfigürasyon ─────────────────────────────────────────────────────────────
 function loadConfig() {
   try {
     if (fs.existsSync("/data/options.json")) {
@@ -28,6 +30,7 @@ const CONFIG = {
 };
 console.log("[config]", CONFIG);
 
+// ── Cache ─────────────────────────────────────────────────────────────────────
 const m3u8Cache = new Map();
 const slugCache = new Map();
 const titleCache = new Map();
@@ -42,13 +45,19 @@ function cacheSet(map, key, value) {
   map.set(key, { value, fetchedAt: Date.now() });
 }
 
+// ── Puppeteer seçenekleri ─────────────────────────────────────────────────────
 function launchOptions() {
   return {
     executablePath: CONFIG.CHROMIUM_PATH,
     headless: "new",
     args: [
-      "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
-      "--disable-gpu", "--disable-extensions", "--no-first-run", "--mute-audio",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--disable-extensions",
+      "--no-first-run",
+      "--mute-audio",
       "--window-size=1280,720",
       "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -58,7 +67,7 @@ function launchOptions() {
   };
 }
 
-// IMDb ID'den film/dizi adını al (ücretsiz OMDB)
+// ── IMDb ID'den başlık al ─────────────────────────────────────────────────────
 function fetchTitle(imdbId) {
   return new Promise((resolve) => {
     const cached = cacheGet(titleCache, imdbId, 7 * 24 * 60 * 60 * 1000);
@@ -81,148 +90,126 @@ function fetchTitle(imdbId) {
   });
 }
 
-function toQuery(title) {
-  return encodeURIComponent(title.toLowerCase().replace(/[^\w\s]/g, " ").trim());
+// ── Başlığı Dizipal slug formatına çevir ──────────────────────────────────────
+// "Breaking Bad" → "breaking-bad"
+// "Gassal"       → "gassal"
+function toSlug(title) {
+  return title
+    .toLowerCase()
+    .replace(/ğ/g, "g")
+    .replace(/ü/g, "u")
+    .replace(/ş/g, "s")
+    .replace(/ı/g, "i")
+    .replace(/ö/g, "o")
+    .replace(/ç/g, "c")
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
 }
 
-async function findShowUrl(query) {
-  const browser = await puppeteer.launch(launchOptions());
-  try {
-    const page = await browser.newPage();
-    await page.setRequestInterception(true);
-    page.on("request", (req) => {
-      if (["image","font","stylesheet","media"].includes(req.resourceType())) req.abort();
-      else req.continue();
-    });
-    const searchUrl = `${CONFIG.BASE_URL}/?s=${query}`;
-    console.log(`[slug] Arama: ${searchUrl}`);
-    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
-
-    const showUrl = await page.evaluate((base) => {
-      const sels = [".movies-list .ml-item a",".film-list .item a","article.poster a",".poster a","article a[href]","h2 a[href]","h3 a[href]"];
-      for (const sel of sels) {
-        const els = document.querySelectorAll(sel);
-        for (const el of els) {
-          if (el.href && el.href.includes(base) && !el.href.includes("/?s=")) return el.href;
-        }
-      }
-      // Fallback: tüm iç linkler
-      for (const a of document.querySelectorAll("a[href]")) {
-        const h = a.href;
-        if (h && h.includes(base) && !h.includes("/?") && !h.includes("/page/") && !h.includes("/category/") && h !== base + "/") return h;
-      }
-      return null;
-    }, CONFIG.BASE_URL);
-
-    return showUrl;
-  } finally {
-    await browser.close();
-  }
-}
-
-async function findEpisodeUrl(showUrl, season, episode) {
-  const browser = await puppeteer.launch(launchOptions());
-  try {
-    const page = await browser.newPage();
-    await page.setRequestInterception(true);
-    page.on("request", (req) => {
-      if (["image","font","stylesheet","media"].includes(req.resourceType())) req.abort();
-      else req.continue();
-    });
-    await page.goto(showUrl, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
-    const s = Number(season), e = Number(episode);
-    const pad = (n) => String(n).padStart(2, "0");
-
-    return await page.evaluate((s, e, base) => {
-      const pad = (n) => String(n).padStart(2, "0");
-      const patterns = [`${s}-sezon-${e}-bolum`,`sezon-${s}-bolum-${e}`,`s${pad(s)}e${pad(e)}`,`${s}x${pad(e)}`];
-      for (const a of document.querySelectorAll("a[href]")) {
-        const h = a.href.toLowerCase();
-        if (!h.includes(base.toLowerCase())) continue;
-        for (const pat of patterns) { if (h.includes(pat)) return a.href; }
-      }
-      return null;
-    }, s, e, CONFIG.BASE_URL);
-  } finally {
-    await browser.close();
-  }
-}
-
+// ── Dizipal URL oluştur ───────────────────────────────────────────────────────
 async function findDizipalUrl(imdbId, type, season, episode) {
   const cacheKey = `${imdbId}:${season}:${episode}`;
   const cached = cacheGet(slugCache, cacheKey, CONFIG.CACHE_TTL_MS);
   if (cached) { console.log(`[slug] Cache: ${cached}`); return cached; }
 
-  // 1) Başlık al
+  // 1) IMDb'den başlığı al
   const title = await fetchTitle(imdbId);
-  if (!title) throw new Error(`IMDb başlığı alınamadı: ${imdbId}`);
+  if (!title) throw new Error(`Başlık alınamadı: ${imdbId}`);
+  console.log(`[slug] Başlık: "${title}"`);
 
-  const query = toQuery(title);
-  console.log(`[slug] "${title}" → query: ${query}`);
+  // 2) Slug üret
+  const slug = toSlug(title);
+  console.log(`[slug] Slug: "${slug}"`);
 
-  // 2) Dizipal'de ara
-  const showUrl = await findShowUrl(query);
-  if (!showUrl) throw new Error(`Dizipal'de "${title}" bulunamadı`);
-  console.log(`[slug] Show: ${showUrl}`);
+  let url;
 
   if (type === "movie" || !season || !episode) {
-    cacheSet(slugCache, cacheKey, showUrl);
-    return showUrl;
+    // Film: /film/slug/ veya /slug/ dene
+    url = `${CONFIG.BASE_URL}/${slug}/`;
+  } else {
+    // Dizi bölümü: /bolum/[slug]-[sezon]-sezon-[bolum]-bolum-izle/
+    url = `${CONFIG.BASE_URL}/bolum/${slug}-${season}-sezon-${episode}-bolum-izle/`;
   }
 
-  // 3) Bölüm URL'si bul
-  const episodeUrl = await findEpisodeUrl(showUrl, season, episode);
-  if (episodeUrl) {
-    console.log(`[slug] Bölüm: ${episodeUrl}`);
-    cacheSet(slugCache, cacheKey, episodeUrl);
-    return episodeUrl;
-  }
-
-  // 4) Tahmin
-  const slug = showUrl.replace(CONFIG.BASE_URL, "").replace(/\//g, "").trim();
-  const guessUrl = `${CONFIG.BASE_URL}/bolum/${slug}-${season}-sezon-${episode}-bolum-izle/`;
-  console.log(`[slug] Tahmin: ${guessUrl}`);
-  cacheSet(slugCache, cacheKey, guessUrl);
-  return guessUrl;
+  console.log(`[slug] URL: ${url}`);
+  cacheSet(slugCache, cacheKey, url);
+  return url;
 }
 
+// ── M3U8 yakala ───────────────────────────────────────────────────────────────
 async function scrapeM3U8(pageUrl) {
   const cached = cacheGet(m3u8Cache, pageUrl, CONFIG.CACHE_TTL_MS);
   if (cached) { console.log(`[scraper] Cache: ${pageUrl}`); return cached; }
 
   console.log(`[scraper] Açılıyor: ${pageUrl}`);
   const browser = await puppeteer.launch(launchOptions());
+
   try {
     const m3u8 = await new Promise(async (resolve, reject) => {
       const page = await browser.newPage();
-      await page.setExtraHTTPHeaders({ "Accept-Language": "tr-TR,tr;q=0.9", Referer: CONFIG.BASE_URL + "/" });
+      await page.setExtraHTTPHeaders({
+        "Accept-Language": "tr-TR,tr;q=0.9",
+        Referer: CONFIG.BASE_URL + "/",
+        Origin: CONFIG.BASE_URL,
+      });
+
       await page.setRequestInterception(true);
-      const BLOCK = new Set(["image","font","stylesheet"]);
+      const BLOCK = new Set(["image", "font", "stylesheet"]);
+
       let resolved = false;
-      const done = (v) => { if (!resolved) { resolved=true; clearTimeout(t); resolve(v); } };
-      const fail = (e) => { if (!resolved) { resolved=true; clearTimeout(t); reject(e); } };
-      const t = setTimeout(() => fail(new Error(`Timeout: ${pageUrl}`)), CONFIG.TIMEOUT_MS);
+      const done = (v) => { if (!resolved) { resolved = true; clearTimeout(t); resolve(v); } };
+      const fail = (e) => { if (!resolved) { resolved = true; clearTimeout(t); reject(e); } };
+
+      const t = setTimeout(() => {
+        fail(new Error(`Timeout: ${pageUrl}`));
+      }, CONFIG.TIMEOUT_MS);
 
       page.on("request", (req) => {
         if (BLOCK.has(req.resourceType())) { req.abort(); return; }
         const url = req.url();
-        if (url.includes(".m3u8")) { console.log(`[scraper] M3U8: ${url}`); req.continue(); done(url); return; }
+        if (url.includes(".m3u8")) {
+          console.log(`[scraper] M3U8 yakalandı: ${url}`);
+          req.continue();
+          done(url);
+          return;
+        }
         req.continue();
       });
 
       try {
         await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
+
+        // iframe bul ve aç
         try {
           const iframeSrc = await page.evaluate(() => {
-            const sels = ['iframe[src*="player"]','iframe[src*="embed"]','iframe[src*="video"]','div.player iframe','iframe'];
-            for (const s of sels) { const el = document.querySelector(s); if (el?.src && !el.src.startsWith("about")) return el.src; }
+            const sels = [
+              'iframe[src*="player"]', 'iframe[src*="embed"]',
+              'iframe[src*="video"]', 'iframe[src*="izle"]',
+              'div.player iframe', 'div#player iframe',
+              '#video-player', 'iframe',
+            ];
+            for (const s of sels) {
+              const el = document.querySelector(s);
+              if (el && el.src && !el.src.startsWith("about")) return el.src;
+            }
             return null;
           });
-          if (iframeSrc) { console.log(`[scraper] iframe: ${iframeSrc}`); await page.goto(iframeSrc, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS }); }
-        } catch (e) { console.warn("[scraper] iframe atlandı:", e.message); }
+
+          if (iframeSrc) {
+            console.log(`[scraper] iframe: ${iframeSrc}`);
+            await page.goto(iframeSrc, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
+          }
+        } catch (e) {
+          console.warn("[scraper] iframe atlandı:", e.message);
+        }
+
+        // JS'nin video yüklemesini bekle
         await new Promise(r => setTimeout(r, 8000));
+
       } catch (e) { fail(e); }
     });
+
     cacheSet(m3u8Cache, pageUrl, m3u8);
     return m3u8;
   } finally {
@@ -230,46 +217,79 @@ async function scrapeM3U8(pageUrl) {
   }
 }
 
+// ── Express ───────────────────────────────────────────────────────────────────
 const app = express();
-app.use((req, res, next) => { res.setHeader("Access-Control-Allow-Origin", "*"); next(); });
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  next();
+});
 
-app.get("/health", (req, res) => res.json({ status: "ok", uptime: process.uptime(), cacheSize: m3u8Cache.size }));
-app.get("/manifest.json", (req, res) => res.json(JSON.parse(fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8"))));
+// Health
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", uptime: process.uptime(), cacheSize: m3u8Cache.size });
+});
 
+// Manifest
+app.get("/manifest.json", (req, res) => {
+  res.json(JSON.parse(fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8")));
+});
+
+// Stream — Fusion'dan gelen istek
 app.get("/stream/:type/:encodedId.json", async (req, res) => {
   const { type } = req.params;
   const id = decodeURIComponent(req.params.encodedId);
   console.log(`[stream] type=${type} id=${id}`);
+
   try {
     let dizipalUrl;
+
     if (id.startsWith("http")) {
+      // Direkt URL
       dizipalUrl = id;
     } else {
       const epMatch = id.match(/^(tt\d+):(\d+):(\d+)$/);
       if (epMatch) {
+        // tt1234567:1:3 → dizi bölümü
         dizipalUrl = await findDizipalUrl(epMatch[1], "series", epMatch[2], epMatch[3]);
       } else if (/^tt\d+$/.test(id)) {
+        // tt1234567 → film
         dizipalUrl = await findDizipalUrl(id, type, null, null);
       } else {
+        console.warn(`[stream] Tanınmayan ID: ${id}`);
         return res.json({ streams: [] });
       }
     }
-    console.log(`[stream] URL: ${dizipalUrl}`);
+
+    console.log(`[stream] Dizipal URL: ${dizipalUrl}`);
     const m3u8Url = await scrapeM3U8(dizipalUrl);
-    res.json({ streams: [{ url: m3u8Url, title: "Dizipal", name: "HLS · M3U8", behaviorHints: { bingeGroup: "dizipal" } }] });
+
+    res.json({
+      streams: [{
+        url: m3u8Url,
+        title: "Dizipal",
+        name: "HLS · M3U8",
+        description: "dizipal.im",
+        behaviorHints: { bingeGroup: "dizipal" },
+      }],
+    });
   } catch (err) {
     console.error("[stream] Hata:", err.message);
     res.json({ streams: [] });
   }
 });
 
+// Manuel scrape (test)
 app.get("/scrape", async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: "?url= gerekli" });
-  try { res.json({ success: true, m3u8: await scrapeM3U8(url) }); }
-  catch (err) { res.status(500).json({ success: false, error: err.message }); }
+  try {
+    res.json({ success: true, m3u8: await scrapeM3U8(url) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
+// Cache temizle
 app.post("/cache/clear", (req, res) => {
   const n = m3u8Cache.size + slugCache.size + titleCache.size;
   m3u8Cache.clear(); slugCache.clear(); titleCache.clear();
@@ -277,4 +297,7 @@ app.post("/cache/clear", (req, res) => {
 });
 
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
-app.listen(CONFIG.PORT, "0.0.0.0", () => console.log(`\n🚀 Fusion Dizipal Addon -> http://0.0.0.0:${CONFIG.PORT}`));
+
+app.listen(CONFIG.PORT, "0.0.0.0", () => {
+  console.log(`\n🚀 Fusion Dizipal Addon v1.0.3 -> http://0.0.0.0:${CONFIG.PORT}`);
+});
