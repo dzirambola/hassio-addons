@@ -1,7 +1,7 @@
 "use strict";
 /**
- * Fusion Dizipal Addon - v1.2.9
- * Özellikler: GitHub Logo, Temiz Arayüz, Proxy Desteği ve Dinamik Başlıklar
+ * Fusion Dizipal Addon - v1.3.0
+ * Özellikler: Temiz "Dizipal" adı, Çözünürlük Bilgisi (1080p) ve GitHub Logo
  */
 
 const express = require("express");
@@ -19,7 +19,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.2.9",
+  VERSION: "1.3.0",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: 45000,
@@ -30,7 +30,7 @@ const CONFIG = {
 
 const app = express();
 
-// Cache Mekanizması
+// Cache
 const cache = new Map();
 const cacheSet = (key, val) => cache.set(key, { v: val, t: Date.now() });
 const cacheGet = (key, ttl) => {
@@ -61,7 +61,7 @@ async function fetchTitle(imdbId) {
   });
 }
 
-// ── 3. Scraper (m3u8 Yakalayıcı) ──────────────────────────────────────────────
+// ── 3. Scraper ─────────────────────────────────────────────────────────────────
 async function scrapeM3U8(pageUrl) {
   const cached = cacheGet(`m3u8:${pageUrl}`, 12 * 60 * 60 * 1000);
   if (cached) return cached;
@@ -97,7 +97,7 @@ async function scrapeM3U8(pageUrl) {
   } finally { await browser.close(); }
 }
 
-// ── 4. Proxy (Apple TV İçin Akış Tüneli) ──────────────────────────────────────
+// ── 4. Proxy ─────────────────────────────────────────────────────────────────────
 app.get("/proxy-stream", (req, res) => {
   const targetUrl = req.query.url;
   if (!targetUrl) return res.sendStatus(400);
@@ -109,7 +109,7 @@ app.get("/proxy-stream", (req, res) => {
   pReq.on('error', () => res.sendStatus(500));
 });
 
-// ── 5. Stremio/Fusion Route'ları ───────────────────────────────────────────────
+// ── 5. Stremio/Fusion Routes ────────────────────────────────────────────────────
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "fusion.dizipal.clean",
@@ -130,16 +130,18 @@ app.get("/stream/:type/:id.json", async (req, res) => {
     let title, dizipalUrl, streamTitle;
     const epMatch = cleanId.match(/^(tt\d+):(\d+):(\d+)$/);
 
-    if (epMatch) { 
+    if (epMatch) { // Dizi
       title = await fetchTitle(epMatch[1]);
-      if (!title) throw new Error("Başlık bulunamadı");
+      if (!title) throw new Error("Title bulunamadı");
       dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
-      streamTitle = `${title} S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')}`;
-    } else { 
+      // Başlık: Dizi Adı S01E01 [1080p]
+      streamTitle = `1080p · ${title} S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')}`;
+    } else { // Film
       title = await fetchTitle(cleanId);
-      if (!title) throw new Error("Başlık bulunamadı");
+      if (!title) throw new Error("Title bulunamadı");
       dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
-      streamTitle = title;
+      // Başlık: Film Adı [1080p]
+      streamTitle = `1080p · ${title}`;
     }
 
     const rawM3u8 = await scrapeM3U8(dizipalUrl);
@@ -162,7 +164,6 @@ app.get("/stream/:type/:id.json", async (req, res) => {
   }
 });
 
-// CORS Ayarları
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   next();
