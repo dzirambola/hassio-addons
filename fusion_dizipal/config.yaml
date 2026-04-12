@@ -1,0 +1,52 @@
+name: "Fusion Dizipal Addon"
+description: >
+  Fusion Media Center eklentisi – dizipal.im sitesinden Puppeteer ile
+  M3U8 video linklerini yakalar ve Fusion protokolü ile sunar.
+version: "1.0.8"
+slug: "fusion_dizipal"
+url: "https://github.com/dzirambola/fusion-dizipal-addon"
+
+build_from:
+  aarch64: "debian:bullseye-slim"
+  armv7: "debian:bullseye-slim"
+  amd64: "debian:bullseye-slim"
+
+ports:
+  7860/tcp: 7860
+
+ports_description:
+  7860/tcp: "Fusion Dizipal API & Manifest"
+
+init: false
+startup: "application"
+boot: "auto"
+
+map:
+  - data:rw
+
+options:
+  base_url: "https://dizipal.im"
+  addon_url: "http://192.168.2.145:7860"
+  port: 7860
+  cache_ttl_hours: 12
+  headless: true
+  timeout_ms: 45000
+
+schema:
+  base_url: str
+  addon_url: str
+  port: int(1024,65535)
+  cache_ttl_hours: int(1,72)
+  headless: bool
+  timeout_ms: int(5000,60000)
+
+privileged:
+  - SYS_ADMIN
+
+panel_icon: "mdi:play-circle-outline"
+panel_title: "Fusion Dizipal"
+
+arch:
+  - aarch64
+  - armv7
+  - amd64
