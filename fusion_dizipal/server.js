@@ -1,16 +1,5 @@
 "use strict";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Fusion Media Center – Dizipal Scraper Addon
-// server.js  |  Node.js + Express + Puppeteer-Extra + Stealth
-//
-// Endpoints:
-//   GET /manifest.json              → Fusion addon manifest
-//   GET /stream/:type/:id.json      → Stream (M3U8) resolver
-//   GET /scrape?url=<dizipal-url>   → Raw scraper (debug / direct use)
-//   GET /health                     → Health-check
-// ─────────────────────────────────────────────────────────────────────────────
-
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -19,84 +8,59 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 
 puppeteer.use(StealthPlugin());
 
-// ── Configuration ─────────────────────────────────────────────────────────────
-// Read from HAOS options file when running inside the addon,
-// fall back to sensible defaults for local development.
+// ── Konfigürasyon ─────────────────────────────────────────────────────────────
 function loadConfig() {
-  const optionsPath = "/data/options.json"; // HAOS injects this file
   try {
-    if (fs.existsSync(optionsPath)) {
-      const raw = fs.readFileSync(optionsPath, "utf8");
-      return JSON.parse(raw);
+    if (fs.existsSync("/data/options.json")) {
+      return JSON.parse(fs.readFileSync("/data/options.json", "utf8"));
     }
-  } catch (e) {
-    console.warn("[config] Could not read HAOS options.json, using defaults:", e.message);
-  }
+  } catch (e) {}
   return {};
 }
 
 const opts = loadConfig();
 
 const CONFIG = {
-  // ── Easily update when dizipal rotates its domain ──
   BASE_URL: opts.base_url || process.env.DIZIPAL_BASE_URL || "https://dizipal.im",
   PORT: Number(opts.port || process.env.PORT || 7860),
   CACHE_TTL_MS: (Number(opts.cache_ttl_hours || 12)) * 60 * 60 * 1000,
   HEADLESS: opts.headless !== undefined ? opts.headless : true,
-  TIMEOUT_MS: Number(opts.timeout_ms || 30000),
-  // Path to Chromium installed by the Dockerfile
+  TIMEOUT_MS: Number(opts.timeout_ms || 45000),
   CHROMIUM_PATH: process.env.CHROMIUM_PATH || "/usr/bin/chromium",
 };
 
-console.log("[config]", {
-  BASE_URL: CONFIG.BASE_URL,
-  PORT: CONFIG.PORT,
-  CACHE_TTL_MS: CONFIG.CACHE_TTL_MS,
-  HEADLESS: CONFIG.HEADLESS,
-  TIMEOUT_MS: CONFIG.TIMEOUT_MS,
-  CHROMIUM_PATH: CONFIG.CHROMIUM_PATH,
-});
+console.log("[config]", CONFIG);
 
-// ── In-memory Cache ───────────────────────────────────────────────────────────
-// Stores: { m3u8: string, fetchedAt: number }
-// Key   : the dizipal page URL (normalised)
-const cache = new Map();
+// ── Cache ─────────────────────────────────────────────────────────────────────
+const m3u8Cache = new Map();   // url → { m3u8, fetchedAt }
+const slugCache = new Map();   // imdbId:season:episode → dizipalUrl
 
-function cacheGet(key) {
-  const entry = cache.get(key);
+function cacheGet(map, key, ttl) {
+  const entry = map.get(key);
   if (!entry) return null;
-  if (Date.now() - entry.fetchedAt > CONFIG.CACHE_TTL_MS) {
-    cache.delete(key);
-    return null;
-  }
-  return entry.m3u8;
+  if (Date.now() - entry.fetchedAt > ttl) { map.delete(key); return null; }
+  return entry.value;
 }
 
-function cacheSet(key, m3u8) {
-  cache.set(key, { m3u8, fetchedAt: Date.now() });
+function cacheSet(map, key, value) {
+  map.set(key, { value, fetchedAt: Date.now() });
 }
 
-// ── Puppeteer: Launch options (ARM64 / Raspberry Pi optimised) ─────────────────
-function buildLaunchOptions() {
+// ── Puppeteer launch options ──────────────────────────────────────────────────
+function launchOptions() {
   return {
     executablePath: CONFIG.CHROMIUM_PATH,
-    headless: CONFIG.HEADLESS ? "new" : false,
+    headless: "new",
     args: [
-      "--no-sandbox",                     // Required inside Docker / HAOS
+      "--no-sandbox",
       "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",          // Avoids /dev/shm size issues on Pi
-      "--disable-gpu",                    // No GPU inside container
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
       "--disable-extensions",
-      "--disable-background-networking",
-      "--disable-sync",
       "--no-first-run",
-      "--no-zygote",                      // Helps on low-RAM devices
-      "--single-process",                 // ⚠ Use if you still get crashes on Pi 3
       "--mute-audio",
       "--window-size=1280,720",
-      "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-        "AppleWebKit/537.36 (KHTML, like Gecko) " +
-        "Chrome/120.0.0.0 Safari/537.36",
+      "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
     defaultViewport: { width: 1280, height: 720 },
     ignoreHTTPSErrors: true,
@@ -104,293 +68,258 @@ function buildLaunchOptions() {
   };
 }
 
-// ── Core Scraper ──────────────────────────────────────────────────────────────
-/**
- * Launches Chromium, navigates to `pageUrl`, intercepts network requests,
- * and returns the first M3U8 URL found (or throws if none found in time).
- *
- * Strategy:
- *  1. Open page with request interception enabled.
- *  2. Block heavy assets (images, fonts, CSS) to speed things up.
- *  3. Wait for an iframe that likely contains the video player.
- *  4. Navigate the iframe src as well (some players load inside an iframe).
- *  5. Resolve as soon as a "master.m3u8" (or any .m3u8) request is detected.
- *  6. Hard timeout as safety net.
- *
- * @param {string} pageUrl  Full URL of the dizipal episode/movie page
- * @returns {Promise<string>} Resolved M3U8 URL
- */
-async function scrapeM3U8(pageUrl) {
-  // Return cached hit immediately
-  const cached = cacheGet(pageUrl);
-  if (cached) {
-    console.log(`[scraper] Cache hit for ${pageUrl}`);
-    return cached;
-  }
+// ── Dizipal'de arama yaparak slug bul ────────────────────────────────────────
+// IMDb ID + dizi adı ile Dizipal'in arama sayfasını açar,
+// ilk sonucun linkini alır, sonra bölüm sayfasına yönlendirir.
+async function findDizipalUrl(imdbId, type, season, episode) {
+  const cacheKey = `${imdbId}:${season}:${episode}`;
+  const cached = cacheGet(slugCache, cacheKey, CONFIG.CACHE_TTL_MS);
+  if (cached) { console.log(`[slug] Cache hit: ${cached}`); return cached; }
 
-  console.log(`[scraper] Launching browser for: ${pageUrl}`);
-  const browser = await puppeteer.launch(buildLaunchOptions());
+  console.log(`[slug] Searching dizipal for imdb:${imdbId} s${season}e${episode}`);
+
+  const browser = await puppeteer.launch(launchOptions());
+  try {
+    const page = await browser.newPage();
+    await page.setExtraHTTPHeaders({ "Accept-Language": "tr-TR,tr;q=0.9" });
+
+    // 1) Dizipal'in arama endpointi
+    const searchUrl = `${CONFIG.BASE_URL}/?s=${imdbId}`;
+    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
+
+    // 2) İlk arama sonucunun linkini al
+    const showUrl = await page.evaluate(() => {
+      const selectors = [
+        "article.poster a",
+        ".movies-list article a",
+        ".film-list article a",
+        "article a",
+        ".search-result a",
+        "h2.title a",
+        "a.poster",
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el && el.href) return el.href;
+      }
+      return null;
+    });
+
+    if (!showUrl) throw new Error(`Dizipal'de ${imdbId} bulunamadı`);
+    console.log(`[slug] Show URL: ${showUrl}`);
+
+    // 3) Dizi ise bölüm sayfasına git
+    if (type === "series" && season && episode) {
+      // Dizi sayfasını aç, bölüm linklerini listele
+      await page.goto(showUrl, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
+
+      const episodeUrl = await page.evaluate((s, e) => {
+        const pad = (n) => String(n).padStart(2, "0");
+        const allLinks = Array.from(document.querySelectorAll("a[href]"));
+
+        // "1-sezon-1-bolum" veya "s01e01" formatını ara
+        const patterns = [
+          `${s}-sezon-${e}-bolum`,
+          `sezon-${s}-bolum-${e}`,
+          `s${pad(s)}e${pad(e)}`,
+          `-${s}x${pad(e)}-`,
+        ];
+
+        for (const link of allLinks) {
+          const href = link.href.toLowerCase();
+          for (const pat of patterns) {
+            if (href.includes(pat)) return link.href;
+          }
+        }
+        return null;
+      }, Number(season), Number(episode));
+
+      if (episodeUrl) {
+        console.log(`[slug] Episode URL: ${episodeUrl}`);
+        cacheSet(slugCache, cacheKey, episodeUrl);
+        return episodeUrl;
+      }
+
+      // Bölüm linki bulunamadıysa slug tahmin et
+      const slug = showUrl.split("/").filter(Boolean).pop();
+      const s = String(season).padStart(0, "");
+      const e = String(episode).padStart(0, "");
+      const guessUrl = `${CONFIG.BASE_URL}/bolum/${slug}-${s}-sezon-${e}-bolum-izle/`;
+      console.log(`[slug] Guessing URL: ${guessUrl}`);
+      cacheSet(slugCache, cacheKey, guessUrl);
+      return guessUrl;
+    }
+
+    // Film ise direkt show URL döndür
+    cacheSet(slugCache, imdbId, showUrl);
+    return showUrl;
+
+  } finally {
+    await browser.close();
+  }
+}
+
+// ── M3U8 yakala ───────────────────────────────────────────────────────────────
+async function scrapeM3U8(pageUrl) {
+  const cached = cacheGet(m3u8Cache, pageUrl, CONFIG.CACHE_TTL_MS);
+  if (cached) { console.log(`[scraper] Cache hit: ${pageUrl}`); return cached; }
+
+  console.log(`[scraper] Opening: ${pageUrl}`);
+  const browser = await puppeteer.launch(launchOptions());
 
   try {
     const m3u8 = await new Promise(async (resolve, reject) => {
       const page = await browser.newPage();
 
-      // ── Extra stealth headers ──────────────────────────────────────────
       await page.setExtraHTTPHeaders({
-        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Language": "tr-TR,tr;q=0.9",
         Referer: CONFIG.BASE_URL + "/",
         Origin: CONFIG.BASE_URL,
       });
 
-      // ── Request interception ───────────────────────────────────────────
       await page.setRequestInterception(true);
+      const BLOCK = new Set(["image", "font", "stylesheet"]);
 
-      const BLOCK_TYPES = new Set(["image", "font", "stylesheet", "media"]);
+      let resolved = false;
+      const done = (val) => { if (!resolved) { resolved = true; clearTimeout(timer); resolve(val); } };
+      const fail = (err) => { if (!resolved) { resolved = true; clearTimeout(timer); reject(err); } };
+
+      const timer = setTimeout(() => {
+        fail(new Error(`Timeout: M3U8 bulunamadı (${CONFIG.TIMEOUT_MS}ms) - ${pageUrl}`));
+      }, CONFIG.TIMEOUT_MS);
 
       page.on("request", (req) => {
-        // Block heavy resources to speed up scraping
-        if (BLOCK_TYPES.has(req.resourceType())) {
-          req.abort();
-          return;
-        }
-
+        if (BLOCK.has(req.resourceType())) { req.abort(); return; }
         const url = req.url();
-
-        // ── Detect M3U8 ─────────────────────────────────────────────────
-        // Match "master.m3u8" first (highest quality playlist),
-        // then fall back to any .m3u8 URL.
         if (url.includes(".m3u8")) {
-          console.log(`[scraper] M3U8 intercepted: ${url}`);
-          req.continue(); // Let the request proceed normally
-          resolve(url);
+          console.log(`[scraper] M3U8 yakalandı: ${url}`);
+          req.continue();
+          done(url);
           return;
         }
-
         req.continue();
       });
 
-      // Safety: reject after timeout
-      const timer = setTimeout(() => {
-        reject(new Error(`Timeout: No M3U8 found within ${CONFIG.TIMEOUT_MS}ms for ${pageUrl}`));
-      }, CONFIG.TIMEOUT_MS);
-
-      // Clean up timer on resolve
-      const originalResolve = resolve;
-      resolve = (val) => {
-        clearTimeout(timer);
-        originalResolve(val);
-      };
-
       try {
-        // ── Navigate to the episode/movie page ──────────────────────────
-        await page.goto(pageUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: CONFIG.TIMEOUT_MS,
-        });
+        await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
 
-        // ── Try to find and navigate the embedded player iframe ─────────
-        // Dizipal typically wraps the video in an <iframe> with an
-        // external player URL. We navigate to that URL as well so
-        // Chromium fires the actual video segment requests.
+        // iframe src'yi bul ve aç
         try {
           const iframeSrc = await page.evaluate(() => {
-            // Common selectors for player iframes
-            const selectors = [
-              'iframe[src*="player"]',
-              'iframe[src*="embed"]',
-              'iframe[src*="video"]',
-              'iframe[src*="izle"]',
-              'iframe#video-player',
-              'div.player-container iframe',
-              'div#player iframe',
-              'iframe',                 // last-resort fallback
+            const sels = [
+              'iframe[src*="player"]', 'iframe[src*="embed"]',
+              'iframe[src*="video"]',  'iframe[src*="izle"]',
+              'div.player iframe',     'div#player iframe',
+              '#video-player',         'iframe',
             ];
-            for (const sel of selectors) {
-              const el = document.querySelector(sel);
-              if (el && el.src) return el.src;
+            for (const s of sels) {
+              const el = document.querySelector(s);
+              if (el && el.src && !el.src.startsWith("about")) return el.src;
             }
             return null;
           });
 
           if (iframeSrc) {
-            console.log(`[scraper] Found iframe src: ${iframeSrc}`);
-            // Open iframe URL in the same page to capture its network traffic
-            await page.goto(iframeSrc, {
-              waitUntil: "domcontentloaded",
-              timeout: CONFIG.TIMEOUT_MS,
-            });
+            console.log(`[scraper] iframe: ${iframeSrc}`);
+            await page.goto(iframeSrc, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
           }
-        } catch (iframeErr) {
-          // Non-fatal – main page interception may still catch the M3U8
-          console.warn("[scraper] iframe navigation skipped:", iframeErr.message);
+        } catch (e) {
+          console.warn("[scraper] iframe atlandı:", e.message);
         }
 
-        // ── Wait a bit for any deferred JS to trigger video load ─────────
-        await page.waitForTimeout(5000);
+        // JS'nin video yüklemesi için bekle
+        await new Promise(r => setTimeout(r, 8000));
 
-        // If we reach here without resolving, the timer will fire eventually.
-      } catch (navErr) {
-        clearTimeout(timer);
-        reject(navErr);
-      }
+      } catch (e) { fail(e); }
     });
 
-    // Store in cache before returning
-    cacheSet(pageUrl, m3u8);
+    cacheSet(m3u8Cache, pageUrl, m3u8);
     return m3u8;
   } finally {
     await browser.close();
   }
 }
 
-// ── URL Builders ──────────────────────────────────────────────────────────────
-/**
- * Converts a Fusion stream request (type + id) into a dizipal.im page URL.
- *
- * Supported ID formats:
- *   - IMDb style   : "tt1234567"           → /dizi/tt1234567  or /film/tt1234567
- *   - Episode      : "tt1234567:1:3"       → /bolum/tt1234567-s01e03
- *   - Dizipal slug : "dizipal:show-name:1:3"
- *   - Raw URL      : already starts with http
- */
-function buildDizipalUrl(type, id) {
-  // Already a full URL (e.g., passed via /scrape endpoint)
-  if (id.startsWith("http")) return id;
-
-  const base = CONFIG.BASE_URL;
-
-  // Episode format: tt1234567:season:episode
-  const episodeMatch = id.match(/^(tt\d+):(\d+):(\d+)$/);
-  if (episodeMatch) {
-    const [, imdbId, season, episode] = episodeMatch;
-    const s = String(season).padStart(2, "0");
-    const e = String(episode).padStart(2, "0");
-    return `${base}/bolum/${imdbId}-s${s}e${e}`;
-  }
-
-  // Dizipal-native slug: dizipal:show-slug:season:episode
-  const dizipalEpMatch = id.match(/^dizipal:(.+):(\d+):(\d+)$/);
-  if (dizipalEpMatch) {
-    const [, slug, season, episode] = dizipalEpMatch;
-    const s = String(season).padStart(2, "0");
-    const e = String(episode).padStart(2, "0");
-    return `${base}/bolum/${slug}-s${s}e${e}`;
-  }
-
-  // Movie or bare series ID
-  if (type === "series") {
-    return `${base}/dizi/${id}`;
-  }
-
-  return `${base}/film/${id}`;
-}
-
-// ── Express App ───────────────────────────────────────────────────────────────
+// ── Express ───────────────────────────────────────────────────────────────────
 const app = express();
 
-// Allow Fusion (and browsers) to reach the addon from any origin
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   next();
 });
 
-app.use(express.json());
-
-// ── /health ───────────────────────────────────────────────────────────────────
+// Health
 app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    uptime: process.uptime(),
-    cacheSize: cache.size,
-    config: {
-      BASE_URL: CONFIG.BASE_URL,
-      CACHE_TTL_MS: CONFIG.CACHE_TTL_MS,
-    },
-  });
+  res.json({ status: "ok", uptime: process.uptime(), cacheSize: m3u8Cache.size });
 });
 
-// ── /manifest.json ────────────────────────────────────────────────────────────
+// Manifest
 app.get("/manifest.json", (req, res) => {
-  const manifest = JSON.parse(
-    fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8")
-  );
-  res.json(manifest);
+  res.json(JSON.parse(fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8")));
 });
 
-// ── /stream/:type/:id.json  (Fusion protocol endpoint) ───────────────────────
-// Examples:
-//   /stream/movie/tt0000001.json
-//   /stream/series/tt0000002:1:3.json
+// Stream endpoint — Fusion'dan gelen istek
 app.get("/stream/:type/:encodedId.json", async (req, res) => {
-  const { type, encodedId } = req.params;
-  // Express captures the param before ".json"; decode %3A → ":"
-  const id = decodeURIComponent(encodedId);
-
+  const { type } = req.params;
+  const id = decodeURIComponent(req.params.encodedId);
   console.log(`[stream] type=${type} id=${id}`);
 
   try {
-    const dizipalUrl = buildDizipalUrl(type, id);
-    console.log(`[stream] → dizipal URL: ${dizipalUrl}`);
+    let dizipalUrl;
 
+    // Eğer ID zaten bir URL ise direkt kullan
+    if (id.startsWith("http")) {
+      dizipalUrl = id;
+    } else {
+      // IMDb formatı: tt1234567 veya tt1234567:1:3
+      const epMatch = id.match(/^(tt\d+):(\d+):(\d+)$/);
+      if (epMatch) {
+        const [, imdbId, season, episode] = epMatch;
+        dizipalUrl = await findDizipalUrl(imdbId, "series", season, episode);
+      } else {
+        dizipalUrl = await findDizipalUrl(id, type, null, null);
+      }
+    }
+
+    console.log(`[stream] Dizipal URL: ${dizipalUrl}`);
     const m3u8Url = await scrapeM3U8(dizipalUrl);
 
     res.json({
-      streams: [
-        {
-          url: m3u8Url,
-          title: "Dizipal",
-          name: "M3U8 · HLS",
-          description: `Kaynak: ${CONFIG.BASE_URL}`,
-          behaviorHints: {
-            bingeGroup: "dizipal",
-          },
-        },
-      ],
+      streams: [{
+        url: m3u8Url,
+        title: "Dizipal",
+        name: "HLS · M3U8",
+        description: "dizipal.im",
+        behaviorHints: { bingeGroup: "dizipal" },
+      }],
     });
   } catch (err) {
-    console.error("[stream] Error:", err.message);
-    // Fusion expects an empty array, not an HTTP error, when no stream is found
+    console.error("[stream] Hata:", err.message);
     res.json({ streams: [] });
   }
 });
 
-// ── /scrape?url=<URL>  (debug / direct use) ───────────────────────────────────
-// Lets you test the scraper directly from a browser or curl:
-//   curl "http://localhost:7860/scrape?url=https://dizipal.im/bolum/..."
+// Manuel scrape (test)
 app.get("/scrape", async (req, res) => {
   const { url } = req.query;
-  if (!url) {
-    return res.status(400).json({ error: "Missing ?url= parameter" });
-  }
-
-  console.log(`[scrape] Manual scrape request: ${url}`);
-
+  if (!url) return res.status(400).json({ error: "?url= gerekli" });
   try {
-    const m3u8Url = await scrapeM3U8(url);
-    res.json({ success: true, m3u8: m3u8Url });
+    const m3u8 = await scrapeM3U8(url);
+    res.json({ success: true, m3u8 });
   } catch (err) {
-    console.error("[scrape] Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// ── /cache/clear  (admin helper) ─────────────────────────────────────────────
+// Cache temizle
 app.post("/cache/clear", (req, res) => {
-  const size = cache.size;
-  cache.clear();
-  res.json({ cleared: size });
+  const n = m3u8Cache.size + slugCache.size;
+  m3u8Cache.clear(); slugCache.clear();
+  res.json({ cleared: n });
 });
 
-// ── 404 catch-all ────────────────────────────────────────────────────────────
-app.use((req, res) => {
-  res.status(404).json({ error: "Not found" });
-});
+app.use((req, res) => res.status(404).json({ error: "Not found" }));
 
-// ── Start server ──────────────────────────────────────────────────────────────
 app.listen(CONFIG.PORT, "0.0.0.0", () => {
-  console.log(`\n🚀 Fusion Dizipal Addon running on http://0.0.0.0:${CONFIG.PORT}`);
-  console.log(`   Manifest : http://0.0.0.0:${CONFIG.PORT}/manifest.json`);
-  console.log(`   Health   : http://0.0.0.0:${CONFIG.PORT}/health`);
-  console.log(`   Scrape   : http://0.0.0.0:${CONFIG.PORT}/scrape?url=<dizipal-url>\n`);
+  console.log(`\n🚀 Fusion Dizipal Addon → http://0.0.0.0:${CONFIG.PORT}`);
 });
