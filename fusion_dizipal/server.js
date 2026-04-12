@@ -1,7 +1,7 @@
 "use strict";
 /**
- * Fusion Dizipal Addon - v1.3.0
- * Özellikler: Temiz "Dizipal" adı, Çözünürlük Bilgisi (1080p) ve GitHub Logo
+ * Fusion Dizipal Addon - v1.3.1
+ * Format: [Adı] [SxxExx] · [Çözünürlük]
  */
 
 const express = require("express");
@@ -19,7 +19,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.3.0",
+  VERSION: "1.3.2",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: 45000,
@@ -30,7 +30,7 @@ const CONFIG = {
 
 const app = express();
 
-// Cache
+// Cache Mekanizması
 const cache = new Map();
 const cacheSet = (key, val) => cache.set(key, { v: val, t: Date.now() });
 const cacheGet = (key, ttl) => {
@@ -69,7 +69,7 @@ async function scrapeM3U8(pageUrl) {
   const browser = await puppeteer.launch({
     executablePath: CONFIG.CHROMIUM_PATH,
     headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote"]
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote", "--single-process", "--disable-gpu"]
   });
 
   try {
@@ -88,13 +88,15 @@ async function scrapeM3U8(pageUrl) {
       });
 
       try {
-        await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
+        await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
         const iframe = await page.evaluate(() => document.querySelector('iframe[src*="player"], iframe[src*="embed"]')?.src);
         if (iframe) await page.goto(iframe, { waitUntil: "domcontentloaded" });
         await new Promise(r => setTimeout(r, 10000));
       } catch (e) {}
     });
-  } finally { await browser.close(); }
+  } finally {
+    if (browser) await browser.close();
+  }
 }
 
 // ── 4. Proxy ─────────────────────────────────────────────────────────────────────
@@ -103,7 +105,8 @@ app.get("/proxy-stream", (req, res) => {
   if (!targetUrl) return res.sendStatus(400);
   const options = { headers: { "User-Agent": CONFIG.UA, "Referer": CONFIG.BASE_URL + "/", "Origin": CONFIG.BASE_URL } };
   const pReq = (targetUrl.startsWith('https') ? https : http).get(targetUrl, options, (pRes) => {
-    res.writeHead(pRes.statusCode, pRes.headers);
+    if (pRes.headers['content-type']) res.setHeader('Content-Type', pRes.headers['content-type']);
+    res.writeHead(pRes.statusCode);
     pRes.pipe(res);
   });
   pReq.on('error', () => res.sendStatus(500));
@@ -130,18 +133,18 @@ app.get("/stream/:type/:id.json", async (req, res) => {
     let title, dizipalUrl, streamTitle;
     const epMatch = cleanId.match(/^(tt\d+):(\d+):(\d+)$/);
 
-    if (epMatch) { // Dizi
+    if (epMatch) { // DİZİ FORMATI
       title = await fetchTitle(epMatch[1]);
-      if (!title) throw new Error("Title bulunamadı");
+      if (!title) throw new Error("Başlık bulunamadı");
       dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
-      // Başlık: Dizi Adı S01E01 [1080p]
-      streamTitle = `1080p · ${title} S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')}`;
-    } else { // Film
+      // Çıktı: Breaking Bad S01E03 · 1080p
+      streamTitle = `${title} S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')} · 1080p`;
+    } else { // FİLM FORMATI
       title = await fetchTitle(cleanId);
-      if (!title) throw new Error("Title bulunamadı");
+      if (!title) throw new Error("Başlık bulunamadı");
       dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
-      // Başlık: Film Adı [1080p]
-      streamTitle = `1080p · ${title}`;
+      // Çıktı: Inception · 1080p
+      streamTitle = `${title} · 1080p`;
     }
 
     const rawM3u8 = await scrapeM3U8(dizipalUrl);
@@ -150,8 +153,8 @@ app.get("/stream/:type/:id.json", async (req, res) => {
 
     res.json({
       streams: [{
-        name: "Dizipal",
-        title: streamTitle,
+        name: "Dizipal", // Sadece Dizipal
+        title: streamTitle, // Ad + Sezon/Bölüm + Çözünürlük
         url: proxiedUrl,
         behaviorHints: { 
             notWebReady: true,
@@ -164,6 +167,8 @@ app.get("/stream/:type/:id.json", async (req, res) => {
   }
 });
 
+// Health check ve CORS
+app.get("/health", (req, res) => res.send("OK"));
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   next();
