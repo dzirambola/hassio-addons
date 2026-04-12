@@ -2,7 +2,7 @@ name: "Fusion Dizipal Addon"
 description: >
   Fusion Media Center eklentisi – dizipal.im sitesinden Puppeteer ile
   M3U8 video linklerini yakalar ve Fusion protokolü ile sunar.
-version: "1.0.8"
+version: "1.0.9"
 slug: "fusion_dizipal"
 url: "https://github.com/dzirambola/fusion-dizipal-addon"
 
