@@ -1,53 +1,49 @@
-name: "Dizipal"
-description: "Dizipal İçeriklerini İzleyin."
-version: "1.3.0"
+name: "Dizipal Pro"
+description: "Dizipal içeriklerini Puppeteer tabanlı akıllı scraper ile izleyin."
+version: "1.3.1"
 slug: "fusion_dizipal"
 url: "https://github.com/dzirambola/hassio-addons"
 
-# Görünüm Ayarları
+# Görünüm ve Panel Ayarları
 panel_icon: "mdi:play-box-outline"
-panel_title: "Dizipal"
-# Home Assistant panelinde logonun görünmesi için:
+panel_title: "Dizipal Pro"
 icon: "https://raw.githubusercontent.com/dzirambola/hassio-addons/main/fusion_dizipal/image_0.png"
 
+# Çoklu Mimari Desteği
 build_from:
   aarch64: "debian:bullseye-slim"
   armv7: "debian:bullseye-slim"
   amd64: "debian:bullseye-slim"
 
+# Ağ Ayarları
 ports:
   7860/tcp: 7860
-
 ports_description:
-  7860/tcp: "Dizipal API & Manifest"
+  7860/tcp: "Dizipal API & Manifest Portu"
 
+# Sistem Yetkileri (Puppeteer/Chromium için Kritik)
+privileged:
+  - SYS_ADMIN
 init: false
 startup: "application"
 boot: "auto"
 
+# Veri Kalıcılığı
 map:
   - data:rw
 
+# Kullanıcı Ayarları (Home Assistant Arayüzünden Değiştirilebilir)
 options:
   base_url: "https://dizipal.im"
-  addon_url: "http://192.168.2.145:7860"
   port: 7860
   cache_ttl_hours: 12
-  headless: true
-  timeout_ms: 45000
+  omdb_api_key: "trilogy"
+  timeout_ms: 30000
 
+# Ayar Şeması ve Validasyon
 schema:
   base_url: str
-  addon_url: str
   port: int(1024,65535)
-  cache_ttl_hours: int(1,72)
-  headless: bool
-  timeout_ms: int(5000,60000)
-
-privileged:
-  - SYS_ADMIN
-
-arch:
-  - aarch64
-  - armv7
-  - amd64
+  cache_ttl_hours: int(1,168)
+  omdb_api_key: str?
+  timeout_ms: int(5000,90000)
