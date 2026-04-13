@@ -1,7 +1,7 @@
 "use strict";
 /**
- * Fusion Dizipal Addon - v1.4.0
- * Özellikler: Auto-Domain (Otomatik Adres Bulucu), Proxy, 1080p Etiketi
+ * Fusion Dizipal Addon - v1.4.2
+ * Özellik: Hata durumunda otomatik domain güncelleme (Auto-Domain on Fail)
  */
 
 const express = require("express");
@@ -19,19 +19,19 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.4.0",
-  BASE_URL: opts.base_url || "https://dizipal.im",
+  VERSION: "1.4.2",
+  BASE_URL: opts.base_url || "https://dizipal826.com", 
   PORT: Number(opts.port || 7860),
-  TIMEOUT_MS: 45000,
+  TIMEOUT_MS: 50000,
   CHROMIUM_PATH: "/usr/bin/chromium",
   UA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   LOGO_URL: "https://raw.githubusercontent.com/dzirambola/fusion-dizipal-addon/main/fusion_dizipal/image_0.png"
 };
 
 const app = express();
-let CURRENT_DOMAIN = CONFIG.BASE_URL; // Dinamik domain değişkeni
+let CURRENT_DOMAIN = CONFIG.BASE_URL;
 
-// Cache Mekanizması
+// Cache
 const cache = new Map();
 const cacheSet = (key, val) => cache.set(key, { v: val, t: Date.now() });
 const cacheGet = (key, ttl) => {
@@ -40,46 +40,41 @@ const cacheGet = (key, ttl) => {
   return e.v;
 };
 
-// ── 2. Otomatik Domain Bulucu (Auto-Domain) ──────────────────────────────────
-async function findLatestDomain() {
-  console.log("[Auto-Domain] Güncel adres aranıyor...");
+// ── 2. Otomatik Domain Bulucu (Sadece Hata Aldığında Tetiklenir) ─────────────
+async function refreshDomain() {
+  console.log("[Auto-Domain] Hata algılandı, güncel adres aranıyor...");
   const browser = await puppeteer.launch({
     executablePath: CONFIG.CHROMIUM_PATH,
     headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--single-process"]
   });
 
   try {
     const page = await browser.newPage();
     await page.setUserAgent(CONFIG.UA);
-    // Google üzerinden en güncel Dizipal adresini aratır
-    await page.goto("https://www.google.com/search?q=dizipal+güncel+adres", { waitUntil: "networkidle2" });
+    await page.goto("https://www.google.com/search?q=dizipal+güncel+adres", { waitUntil: "networkidle2", timeout: 20000 });
     
-    const newDomain = await page.evaluate(() => {
-      const links = Array.from(document.querySelectorAll('cite')).map(el => el.innerText);
-      const dizipalLink = links.find(l => l.includes('dizipal'));
-      if (dizipalLink) {
-        const url = dizipalLink.startsWith('http') ? dizipalLink : 'https://' + dizipalLink;
-        return new URL(url).origin;
-      }
-      return null;
+    const detected = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll('a'))
+                         .map(a => a.href)
+                         .filter(href => href.includes('dizipal') && !href.includes('google'));
+      return links.length > 0 ? new URL(links[0]).origin : null;
     });
 
-    if (newDomain && newDomain !== CURRENT_DOMAIN) {
-      console.log(`[Auto-Domain] Yeni adres bulundu: ${newDomain}`);
-      CURRENT_DOMAIN = newDomain;
-      return newDomain;
+    if (detected && detected !== CURRENT_DOMAIN) {
+      console.log(`[Auto-Domain] Yeni adres onaylandı: ${detected}`);
+      CURRENT_DOMAIN = detected;
+      return true;
     }
-    return CURRENT_DOMAIN;
   } catch (e) {
-    console.error("[Auto-Domain] Arama başarısız:", e.message);
-    return CURRENT_DOMAIN;
+    console.error("[Auto-Domain] Arama sırasında hata:", e.message);
   } finally {
     await browser.close();
   }
+  return false;
 }
 
-// ── 3. Yardımcı Fonksiyonlar ────────────────────────────────────────────────────
+// ── 3. Yardımcı Fonksiyonlar ──────────────────────────────────────────────────
 function toSlug(title) {
   return title.toLowerCase()
     .replace(/ğ/g,"g").replace(/ü/g,"u").replace(/ş/g,"s")
@@ -101,26 +96,19 @@ async function fetchTitle(imdbId) {
   });
 }
 
-// ── 4. Scraper (İyileştirilmiş) ──────────────────────────────────────────────
+// ── 4. Scraper ────────────────────────────────────────────────────────────────
 async function scrapeM3U8(pageUrl) {
-  const cached = cacheGet(`m3u8:${pageUrl}`, 6 * 60 * 60 * 1000); // 6 saat cache
-  if (cached) return cached;
-
   const browser = await puppeteer.launch({
     executablePath: CONFIG.CHROMIUM_PATH,
     headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote", "--single-process"]
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--single-process"]
   });
 
   try {
     const page = await browser.newPage();
+    await page.setUserAgent(CONFIG.UA);
     await page.setExtraHTTPHeaders({ "Referer": CURRENT_DOMAIN + "/" });
-    await page.setRequestInterception(true);
-    page.on("request", (req) => {
-      if (["image", "font", "stylesheet"].includes(req.resourceType())) req.abort();
-      else req.continue();
-    });
-
+    
     return await new Promise(async (resolve, reject) => {
       const t = setTimeout(() => reject(new Error("Timeout")), CONFIG.TIMEOUT_MS);
       page.on("request", (req) => {
@@ -131,7 +119,7 @@ async function scrapeM3U8(pageUrl) {
         await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
         const iframe = await page.evaluate(() => document.querySelector('iframe[src*="player"], iframe[src*="embed"]')?.src);
         if (iframe) await page.goto(iframe, { waitUntil: "domcontentloaded" });
-        await new Promise(r => setTimeout(r, 10000));
+        await new Promise(r => setTimeout(r, 12000));
       } catch (e) {}
     });
   } finally {
@@ -139,85 +127,63 @@ async function scrapeM3U8(pageUrl) {
   }
 }
 
-// ── 5. Proxy ─────────────────────────────────────────────────────────────────────
+// ── 5. Proxy ───────────────────────────────────────────────────────────────────
 app.get("/proxy-stream", (req, res) => {
   const targetUrl = req.query.url;
   if (!targetUrl) return res.sendStatus(400);
   const options = { headers: { "User-Agent": CONFIG.UA, "Referer": CURRENT_DOMAIN + "/", "Origin": CURRENT_DOMAIN } };
   const pReq = (targetUrl.startsWith('https') ? https : http).get(targetUrl, options, (pRes) => {
-    if (pRes.headers['content-type']) res.setHeader('Content-Type', pRes.headers['content-type']);
-    res.writeHead(pRes.statusCode);
+    res.writeHead(pRes.statusCode, pRes.headers);
     pRes.pipe(res);
   });
   pReq.on('error', () => res.sendStatus(500));
 });
 
-// ── 6. Stremio/Fusion Routes ────────────────────────────────────────────────────
-app.get("/manifest.json", (req, res) => {
-  res.json({
-    id: "fusion.dizipal.clean",
-    name: "Dizipal",
-    version: CONFIG.VERSION,
-    logo: CONFIG.LOGO_URL,
-    resources: ["stream"],
-    types: ["movie", "series"],
-    idPrefixes: ["tt"]
-  });
-});
-
+// ── 6. Stream API ─────────────────────────────────────────────────────────────
 app.get("/stream/:type/:id.json", async (req, res) => {
   const { type, id } = req.params;
   const cleanId = id.replace(".json", "");
 
-  try {
-    let title, dizipalUrl, streamTitle;
+  const processRequest = async (domain) => {
+    let title, dizipalUrl;
     const epMatch = cleanId.match(/^(tt\d+):(\d+):(\d+)$/);
-
-    if (epMatch) { 
-      title = await fetchTitle(epMatch[1]);
-      if (!title) throw new Error("Title bulunamadı");
-      dizipalUrl = `${CURRENT_DOMAIN}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
-      streamTitle = `${title} S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')} · 1080p`;
-    } else { 
-      title = await fetchTitle(cleanId);
-      if (!title) throw new Error("Title bulunamadı");
-      dizipalUrl = `${CURRENT_DOMAIN}/${toSlug(title)}/`;
-      streamTitle = `${title} · 1080p`;
+    title = await fetchTitle(epMatch ? epMatch[1] : cleanId);
+    
+    if (epMatch) {
+      dizipalUrl = `${domain}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
+    } else {
+      dizipalUrl = `${domain}/${toSlug(title)}/`;
     }
+    
+    const m3u8 = await scrapeM3U8(dizipalUrl);
+    return { m3u8, title: epMatch ? `${title} S${epMatch[2].padStart(2,'0')}E${epMatch[3].padStart(2,'0')} · 1080p` : `${title} · 1080p` };
+  };
 
-    // İlk denemede hata alırsak domain güncellemesi dene
-    let rawM3u8;
+  try {
+    // 1. Deneme (Mevcut Domain)
     try {
-      rawM3u8 = await scrapeM3U8(dizipalUrl);
+      const result = await processRequest(CURRENT_DOMAIN);
+      return res.json({ streams: [{ name: "Dizipal", title: result.title, url: `http://192.168.2.145:7860/proxy-stream?url=${encodeURIComponent(result.m3u8)}`, behaviorHints: { notWebReady: true } }] });
     } catch (e) {
-      await findLatestDomain(); // Domain güncelle
-      dizipalUrl = dizipalUrl.replace(CONFIG.BASE_URL, CURRENT_DOMAIN); // Yeni domainle linki güncelle
-      rawM3u8 = await scrapeM3U8(dizipalUrl);
+      // 2. Deneme (Hata aldık, yeni domain ara ve tekrar dene)
+      const changed = await refreshDomain();
+      if (changed) {
+        const result = await processRequest(CURRENT_DOMAIN);
+        return res.json({ streams: [{ name: "Dizipal", title: result.title, url: `http://192.168.2.145:7860/proxy-stream?url=${encodeURIComponent(result.m3u8)}`, behaviorHints: { notWebReady: true } }] });
+      }
+      throw e;
     }
-
-    const host = req.get('host');
-    const proxiedUrl = `http://${host}/proxy-stream?url=${encodeURIComponent(rawM3u8)}`;
-
-    res.json({
-      streams: [{
-        name: "Dizipal",
-        title: streamTitle,
-        url: proxiedUrl,
-        behaviorHints: { 
-            notWebReady: true,
-            proxyHeaders: { request: { "User-Agent": CONFIG.UA, "Referer": CURRENT_DOMAIN + "/" } }
-        }
-      }]
-    });
   } catch (err) {
     res.json({ streams: [] });
   }
 });
 
-app.get("/health", (req, res) => res.json({ status: "OK", domain: CURRENT_DOMAIN }));
-app.use((req, res, next) => { res.setHeader("Access-Control-Allow-Origin", "*"); next(); });
+app.get("/manifest.json", (req, res) => {
+  res.json({ id: "fusion.dizipal.clean", name: "Dizipal", version: CONFIG.VERSION, logo: CONFIG.LOGO_URL, resources: ["stream"], types: ["movie", "series"], idPrefixes: ["tt"] });
+});
 
-app.listen(CONFIG.PORT, "0.0.0.0", async () => {
-  console.log(`\nFusion Addon v${CONFIG.VERSION} çalışıyor`);
-  await findLatestDomain(); // Başlangıçta güncel domaini kontrol et
+app.get("/health", (req, res) => res.json({ status: "OK", domain: CURRENT_DOMAIN, version: CONFIG.VERSION }));
+
+app.listen(CONFIG.PORT, "0.0.0.0", () => {
+  console.log(`Fusion v${CONFIG.VERSION} aktif: http://192.168.2.145:7860`);
 });
