@@ -1,7 +1,7 @@
 {
   "id": "fusion.dizipal.clean",
   "name": "Dizipal",
-  "version": "1.3.2",
+  "version": "1.3.0",
   "description": "Dizipal içeriklerini izleyin.",
   "logo": "https://raw.githubusercontent.com/dzirambola/fusion-dizipal-addon/main/fusion_dizipal/image_0.png",
   "resources": ["stream"],
