@@ -1,7 +1,7 @@
 "use strict";
 /**
  * Fusion Dizipal Addon - v1.3.0
- * Özellikler: Temiz "Dizipal" adı, Çözünürlük Bilgisi (1080p) ve GitHub Logo
+ 
  */
 
 const express = require("express");
