@@ -1,13 +1,13 @@
 # Dizipal Fusion Addon
 
-Dizipal içeriklerini 1080p kalitesinde Fusion Media Center protokolü ile sunan Home Assistant eklentisi.
+Dizipal içeriklerini Fusion Media Center protokolü ile sunan Home Assistant eklentisi.
 
 ## Kurulum (Home Assistant)
 
 1.  Home Assistant paneline gidin.
 2.  **Ayarlar** > **Eklentiler** > **Eklenti Mağazası**'na girin.
 3.  Sağ üstteki üç noktadan **Depolar**'ı (Repositories) seçin.
-4.  Bu repo linkini ekleyin: `https://github.com/dzirambola/fusion-dizipal-addon`
+4.  Bu repo linkini ekleyin: `https://github.com/dzirambola/hassio-addons`
 5.  Listede **Dizipal**'ı bulun ve kurun.
 6.  Eklentiyi başlatın.
 
