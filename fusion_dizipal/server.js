@@ -1,8 +1,8 @@
 "use strict";
 
 /**
- * Fusion Dizipal Addon - v1.4.0 (Public Release)
- * Özellikler: Singleton Browser Lock, Range Header Support (Apple TV Fix), Optimize Proxy
+ * Fusion Dizipal Addon - v1.4.0
+ * Singleton Browser, Range Header Support, Optimize Proxy
  */
 
 const express = require("express");
@@ -28,13 +28,15 @@ const CONFIG = {
   HEADLESS: opts.headless !== false ? "new" : false,
   OMDB_KEY: opts.omdb_api_key || "trilogy",
   CHROMIUM_PATH: "/usr/bin/chromium",
-  UA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+  UA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  LOGO_URL: "https://raw.githubusercontent.com/dzirambola/hassio-addons/main/fusion_dizipal/image_0.png"
 };
 
 const app = express();
 let _browser = null;
 let _isLaunching = false;
 
+// ── 1. Singleton Browser Yönetimi ───────────────────────────────────────────
 async function getBrowser() {
   if (_browser && _browser.connected) return _browser;
   
@@ -45,7 +47,7 @@ async function getBrowser() {
 
   _isLaunching = true;
   try {
-    console.log(`[${new Date().toISOString()}] Tarayıcı başlatılıyor...`);
+    log("Tarayıcı örneği başlatılıyor...");
     _browser = await puppeteer.launch({
       executablePath: CONFIG.CHROMIUM_PATH,
       headless: CONFIG.HEADLESS,
@@ -53,16 +55,110 @@ async function getBrowser() {
     });
     
     _browser.on('disconnected', () => { _browser = null; });
-  } catch (e) {
-    console.error("Tarayıcı başlatma hatası:", e);
   } finally {
     _isLaunching = false;
   }
-  
   return _browser;
 }
 
-// Proxy-Stream: Range desteği ile Apple TV ileri sarma sorunu giderildi
+// ── 2. Yardımcı Fonksiyonlar & Önbellek ───────────────────────────────────────
+function log(msg, type = "INFO") {
+  const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
+  console.log(`[${timestamp}] [${type}] ${msg}`);
+}
+
+const cache = new Map();
+const cacheSet = (key, val) => cache.set(key, { v: val, t: Date.now() });
+const cacheGet = (key, ttl) => {
+  const e = cache.get(key);
+  if (!e || (Date.now() - e.t > ttl)) return null;
+  return e.v;
+};
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of cache.entries()) {
+    const ttl = key.startsWith('m3u8') ? CONFIG.CACHE_TTL_MS : 7 * 24 * 60 * 60 * 1000;
+    if (now - value.t > ttl) cache.delete(key);
+  }
+}, 3600000);
+
+function toSlug(title) {
+  return title.toLowerCase()
+    .replace(/ğ/g,"g").replace(/ü/g,"u").replace(/ş/g,"s")
+    .replace(/ı/g,"i").replace(/ö/g,"o").replace(/ç/g,"c")
+    .replace(/[^a-z0-9\s-]/g,"").trim().replace(/\s+/g,"-");
+}
+
+async function fetchTitle(imdbId) {
+  const cached = cacheGet(`title:${imdbId}`, 7 * 24 * 60 * 60 * 1000);
+  if (cached) return cached;
+  return new Promise((resolve) => {
+    https.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=${CONFIG.OMDB_KEY}`, (res) => {
+      let d = ""; res.on("data", (c) => d += c);
+      res.on("end", () => {
+        try { 
+            const j = JSON.parse(d); 
+            if (j.Title) { 
+                cacheSet(`title:${imdbId}`, j.Title); 
+                resolve(j.Title); 
+            } else resolve(null); 
+        } catch (e) { resolve(null); }
+      });
+    }).on("error", () => resolve(null));
+  });
+}
+
+// ── 3. Dinamik Scraper ────────────────────────────────────────────────────────
+async function scrapeM3U8(pageUrl) {
+  const cached = cacheGet(`m3u8:${pageUrl}`, CONFIG.CACHE_TTL_MS);
+  if (cached) return cached;
+
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  
+  try {
+    await page.setExtraHTTPHeaders({ "Referer": CONFIG.BASE_URL + "/" });
+    await page.setRequestInterception(true);
+
+    page.on("request", (req) => {
+      const type = req.resourceType();
+      if (["image", "font", "stylesheet", "media"].includes(type) || req.url().includes("google")) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
+    return await new Promise(async (resolve, reject) => {
+      const timeout = setTimeout(() => {
+        page.close().catch(() => {});
+        reject(new Error("Zaman aşımı: Link bulunamadı."));
+      }, CONFIG.TIMEOUT_MS);
+
+      page.on("request", (req) => {
+        if (req.url().includes(".m3u8")) { 
+            log(`Link yakalandı: ${req.url().split('?')[0]}`);
+            clearTimeout(timeout); 
+            cacheSet(`m3u8:${pageUrl}`, req.url());
+            page.close().catch(() => {});
+            resolve(req.url()); 
+        }
+      });
+
+      try {
+        await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
+        const iframe = await page.evaluate(() => document.querySelector('iframe[src*="player"], iframe[src*="embed"]')?.src);
+        if (iframe) await page.goto(iframe, { waitUntil: "domcontentloaded" });
+      } catch (e) { log(`Hata: ${e.message}`, "ERROR"); }
+    });
+  } catch (err) {
+    await page.close().catch(() => {});
+    throw err;
+  }
+}
+
+// ── 4. Proxy & Routes ──────────────────────────────────────────────────────────
 app.get("/proxy-stream", (req, res) => {
   const targetUrl = req.query.url;
   if (!targetUrl || !targetUrl.startsWith('http')) return res.status(403).send("Forbidden");
@@ -72,10 +168,10 @@ app.get("/proxy-stream", (req, res) => {
       "User-Agent": CONFIG.UA, 
       "Referer": CONFIG.BASE_URL + "/", 
       "Origin": CONFIG.BASE_URL,
-      ...(req.headers.range && { "Range": req.headers.range }) 
+      ...(req.headers.range && { "Range": req.headers.range }) // Apple TV Fix
     } 
   };
-
+  
   const pReq = (targetUrl.startsWith('https') ? https : http).get(targetUrl, options, (pRes) => {
     res.writeHead(pRes.statusCode, pRes.headers);
     pRes.pipe(res);
@@ -83,20 +179,69 @@ app.get("/proxy-stream", (req, res) => {
   pReq.on('error', () => res.sendStatus(500));
 });
 
-// Yardımcı fonksiyonlar ve diğer rotalar (manifest, stream) aynı yapıda kalabilir...
-// (Kodun kısalığı için temel stream mantığını koruduğunu varsayıyorum)
-
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "fusion.dizipal.clean",
     name: "Dizipal",
     version: CONFIG.VERSION,
+    logo: CONFIG.LOGO_URL,
     resources: ["stream"],
     types: ["movie", "series"],
-    idPrefixes: ["tt"]
+    idPrefixes: ["tt", "dizipal"],
+    catalogs: [],
+    behaviorHints: { configurable: false, configurationRequired: false }
   });
 });
 
+app.get("/stream/:type/:id.json", async (req, res) => {
+  const { type, id } = req.params;
+  const cleanId = id.replace(".json", "");
+  log(`İstek: ${type} - ${cleanId}`);
+
+  try {
+    let title, dizipalUrl, streamTitle;
+    const epMatch = cleanId.match(/^(tt\d+):(\d+):(\d+)$/);
+
+    if (epMatch) { // Dizi
+      title = await fetchTitle(epMatch[1]);
+      if (!title) throw new Error("Title yok");
+      dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
+      streamTitle = `📺 Dizi Bölümü\n⚙️ Kalite: Auto / HD\n🎬 ${title} (S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')})`;
+    } else { // Film
+      title = await fetchTitle(cleanId);
+      if (!title) throw new Error("Title yok");
+      dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
+      streamTitle = `🎥 Sinema Filmi\n⚙️ Kalite: Auto / HD\n🎬 ${title}`;
+    }
+
+    const rawM3u8 = await scrapeM3U8(dizipalUrl);
+    const host = req.get('host');
+    const proxiedUrl = `http://${host}/proxy-stream?url=${encodeURIComponent(rawM3u8)}`;
+
+    res.json({
+      streams: [{
+        name: "Dizipal\nProxy",
+        title: streamTitle,
+        description: `Kaynak: ${CONFIG.BASE_URL}\nİnternet hızınıza göre kalite otomatik ayarlanır.`,
+        url: proxiedUrl,
+        behaviorHints: { 
+            notWebReady: true,
+            bingeGroup: `dizipal-binge-${cleanId.split(':')[0]}`,
+            proxyHeaders: { request: { "User-Agent": CONFIG.UA, "Referer": CONFIG.BASE_URL + "/" } }
+        }
+      }]
+    });
+  } catch (err) {
+    log(`Hata: ${err.message}`, "ERROR");
+    res.json({ streams: [] });
+  }
+});
+
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  next();
+});
+
 app.listen(CONFIG.PORT, "0.0.0.0", () => {
-  console.log(`Fusion Addon v${CONFIG.VERSION} Port ${CONFIG.PORT} aktif`);
+  log(`Fusion Addon v${CONFIG.VERSION} Port ${CONFIG.PORT} aktif`);
 });
