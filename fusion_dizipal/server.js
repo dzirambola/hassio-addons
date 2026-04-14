@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Fusion Dizipal Addon - v1.4.1
+ * Fusion Dizipal Addon - v1.4.2
  * Singleton Browser, Range Header Support, Optimize Proxy
  */
 
@@ -20,7 +20,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.4.1",
+  VERSION: "1.4.2",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: Number(opts.timeout_ms || 45000),
@@ -33,6 +33,13 @@ const CONFIG = {
 };
 
 const app = express();
+
+// 🚨 CORS Middleware DÜZELTMESİ: Rotalardan önceye alındı
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  next();
+});
+
 let _browser = null;
 let _isLaunching = false;
 
@@ -176,7 +183,15 @@ app.get("/proxy-stream", (req, res) => {
     res.writeHead(pRes.statusCode, pRes.headers);
     pRes.pipe(res);
   });
+
   pReq.on('error', () => res.sendStatus(500));
+
+  // 🚨 PROXY "SOCKET HANG" DÜZELTMESİ: İstemci ayrıldığında proxy isteğini iptal et
+  req.on('close', () => {
+    if (!pReq.destroyed) {
+      pReq.destroy();
+    }
+  });
 });
 
 app.get("/manifest.json", (req, res) => {
@@ -235,11 +250,6 @@ app.get("/stream/:type/:id.json", async (req, res) => {
     log(`Hata: ${err.message}`, "ERROR");
     res.json({ streams: [] });
   }
-});
-
-app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  next();
 });
 
 app.listen(CONFIG.PORT, "0.0.0.0", () => {
