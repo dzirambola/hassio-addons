@@ -1,8 +1,8 @@
 "use strict";
 
 /**
- * Fusion Dizipal Addon - v1.4.2
- * Singleton Browser, Range Header Support, Optimized Logging & Cleanup
+ * Fusion Dizipal Addon - v1.4.3
+ * Gelişmiş Hata Yakalama (Error Boundary) ve Bildirim Sistemi
  */
 
 const express = require("express");
@@ -20,7 +20,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.4.2",
+  VERSION: "1.4.3",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: Number(opts.timeout_ms || 45000),
@@ -34,7 +34,6 @@ const CONFIG = {
 
 const app = express();
 
-// 🚀 CORS Middleware (Manifest ve Stream erişimi için en başta)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   next();
@@ -95,30 +94,27 @@ function toSlug(title) {
 async function fetchTitle(imdbId) {
   const cached = cacheGet(`title:${imdbId}`, 7 * 24 * 60 * 60 * 1000);
   if (cached) return cached;
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     https.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=${CONFIG.OMDB_KEY}`, (res) => {
       let d = ""; res.on("data", (c) => d += c);
       res.on("end", () => {
         try { 
             const j = JSON.parse(d); 
-            if (j.Title) { 
+            if (j.Response === "True") { 
                 cacheSet(`title:${imdbId}`, j.Title); 
                 resolve(j.Title); 
-            } else resolve(null); 
-        } catch (e) { resolve(null); }
+            } else reject(new Error(j.Error || "API Hatası")); 
+        } catch (e) { reject(new Error("JSON Ayrıştırma Hatası")); }
       });
-    }).on("error", () => resolve(null));
+    }).on("error", () => reject(new Error("OMDb Bağlantı Hatası")));
   });
 }
 
 async function scrapeM3U8(pageUrl) {
   const cached = cacheGet(`m3u8:${pageUrl}`, CONFIG.CACHE_TTL_MS);
-  if (cached) {
-    log(`Önbellekten alındı (Cache Hit) - Tarayıcı açılmadı.`, "DEBUG");
-    return cached;
-  }
+  if (cached) return cached;
 
-  const startTime = Date.now(); // ⏱ 1. Süre ölçümü başlangıcı
+  const startTime = Date.now();
   const browser = await getBrowser();
   const page = await browser.newPage();
   
@@ -135,12 +131,12 @@ async function scrapeM3U8(pageUrl) {
     });
 
     return await new Promise(async (resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("Zaman aşımı: Link bulunamadı.")), CONFIG.TIMEOUT_MS);
+      const timeout = setTimeout(() => reject(new Error("Zaman aşımı: Yayın linki bulunamadı.")), CONFIG.TIMEOUT_MS);
 
       page.on("request", (req) => {
         if (req.url().includes(".m3u8")) { 
-            const duration = ((Date.now() - startTime) / 1000).toFixed(1); // ⏱ 1. Süre hesaplama
-            log(`Link yakalandı: ${req.url().split('?')[0]} (${duration} saniye sürdü)`);
+            const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+            log(`Link yakalandı: ${req.url().split('?')[0]} (${duration}s)`);
             clearTimeout(timeout); 
             cacheSet(`m3u8:${pageUrl}`, req.url());
             resolve(req.url()); 
@@ -178,12 +174,7 @@ app.get("/proxy-stream", (req, res) => {
   });
 
   pReq.on('error', () => res.sendStatus(500));
-  req.on('close', () => { 
-    if (!pReq.destroyed) {
-        pReq.destroy();
-        log(`İstemci ayrıldı, proxy sonlandırıldı.`, "INFO");
-    }
-  });
+  req.on('close', () => { if (!pReq.destroyed) pReq.destroy(); });
 });
 
 app.get("/manifest.json", (req, res) => {
@@ -210,16 +201,14 @@ app.get("/stream/:type/:id.json", async (req, res) => {
 
     if (epMatch) { 
       title = await fetchTitle(epMatch[1]);
-      if (!title) throw new Error("Title yok");
-      log(`İçerik Çözümlendi: ${title} (S${epMatch[2]} E${epMatch[3]})`, "INFO"); // 🎬 3. İsim logu
+      log(`İçerik: ${title} (S${epMatch[2]} E${epMatch[3]})`);
       dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
-      streamTitle = `📺 Dizi Bölümü\n⚙️ Kalite: Auto / HD\n🎬 ${title} (S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')})`;
+      streamTitle = `📺 Dizi: ${title} S${epMatch[2]}E${epMatch[3]}`;
     } else { 
       title = await fetchTitle(cleanId);
-      if (!title) throw new Error("Title yok");
-      log(`İçerik Çözümlendi: ${title}`, "INFO"); // 🎬 3. İsim logu
+      log(`İçerik: ${title}`);
       dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
-      streamTitle = `🎥 Sinema Filmi\n⚙️ Kalite: Auto / HD\n🎬 ${title}`;
+      streamTitle = `🎥 Film: ${title}`;
     }
 
     const rawM3u8 = await scrapeM3U8(dizipalUrl);
@@ -240,16 +229,27 @@ app.get("/stream/:type/:id.json", async (req, res) => {
       }]
     });
   } catch (err) {
-    log(`Hata: ${err.message}`, "ERROR");
-    res.json({ streams: [] });
+    log(`HATA: ${err.message}`, "ERROR");
+    
+    // 🚨 Hata durumunda kullanıcıya gösterilecek sahte stream objesi
+    let userMsg = "HATA: Link bulunamadı.";
+    if (err.message.includes("API")) userMsg = "HATA: API Limiti Doldu (OMDb).";
+    if (err.message.includes("Zaman aşımı")) userMsg = "HATA: Siteye Erişilemiyor.";
+
+    res.json({
+      streams: [{
+        name: "⚠️ BİLGİ",
+        title: userMsg,
+        description: `Detay: ${err.message}\nLütfen daha sonra tekrar deneyin veya ayarlarınızı kontrol edin.`,
+        url: "http://error" // Oynatılamaz boş link
+      }]
+    });
   }
 });
 
-// 🧹 Eski logları temizleyerek başla
 app.listen(CONFIG.PORT, "0.0.0.0", () => {
   console.clear(); 
   log(`=============================================`, "SYSTEM");
   log(`Fusion Addon v${CONFIG.VERSION} Port ${CONFIG.PORT} aktif`, "SYSTEM");
-  log(`Eski oturum logları temizlendi, sistem hazır.`, "SYSTEM");
   log(`=============================================`, "SYSTEM");
 });
