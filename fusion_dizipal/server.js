@@ -1,6 +1,6 @@
 "use strict";
 /**
- * Fusion Dizipal Addon - v1.3.3 (Singleton Browser & Optimized Performance)
+ * Fusion Dizipal Addon - v1.3.4 (Optimized, Singleton & Accurate Titles)
  */
 
 const express = require("express");
@@ -19,7 +19,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.3.3",
+  VERSION: "1.3.4",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: Number(opts.timeout_ms || 45000),
@@ -33,13 +33,13 @@ const CONFIG = {
 
 const app = express();
 
-// ── 2. Singleton Browser Yönetimi (İyileştirme 2) ──────────────────────────────
+// ── 2. Singleton Browser Yönetimi ───────────────────────────────────────────
 let _browser = null;
 
 async function getBrowser() {
   if (_browser && _browser.connected) return _browser;
   
-  log("Tarayıcı başlatılıyor...");
+  log("Tarayıcı örneği başlatılıyor...");
   _browser = await puppeteer.launch({
     executablePath: CONFIG.CHROMIUM_PATH,
     headless: CONFIG.HEADLESS,
@@ -47,7 +47,7 @@ async function getBrowser() {
   });
   
   _browser.on('disconnected', () => {
-    log("Tarayıcı bağlantısı kesildi.", "WARN");
+    log("Tarayıcı bağlantısı koptu, bir sonraki istekte yeniden başlatılacak.", "WARN");
     _browser = null;
   });
   
@@ -68,6 +68,7 @@ const cacheGet = (key, ttl) => {
   return e.v;
 };
 
+// Temizlik: Süresi dolan önbelleği saat başı sil
 setInterval(() => {
   const now = Date.now();
   for (const [key, value] of cache.entries()) {
@@ -102,7 +103,7 @@ async function fetchTitle(imdbId) {
   });
 }
 
-// ── 4. Optimize Edilmiş Scraper (İyileştirme 3) ───────────────────────────────
+// ── 4. Dinamik Scraper ────────────────────────────────────────────────────────
 async function scrapeM3U8(pageUrl) {
   const cached = cacheGet(`m3u8:${pageUrl}`, CONFIG.CACHE_TTL_MS);
   if (cached) return cached;
@@ -128,15 +129,15 @@ async function scrapeM3U8(pageUrl) {
     return await new Promise(async (resolve, reject) => {
       const timeout = setTimeout(() => {
         page.close().catch(() => {});
-        reject(new Error("Timeout: m3u8 bulunamadı."));
+        reject(new Error("Zaman aşımı: Yayın linki bulunamadı."));
       }, CONFIG.TIMEOUT_MS);
 
       page.on("request", (req) => {
         if (req.url().includes(".m3u8")) { 
-            log(`m3u8 bulundu: ${req.url().split('?')[0]}...`);
+            log(`m3u8 yakalandı: ${req.url().split('?')[0]}...`);
             clearTimeout(timeout); 
             cacheSet(`m3u8:${pageUrl}`, req.url());
-            page.close().catch(() => {}); // Sayfayı kapat ama tarayıcıyı açık bırak
+            page.close().catch(() => {}); // Sekmeyi kapat
             resolve(req.url()); 
         }
       });
@@ -145,12 +146,11 @@ async function scrapeM3U8(pageUrl) {
         await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
         const iframe = await page.evaluate(() => document.querySelector('iframe[src*="player"], iframe[src*="embed"]')?.src);
         if (iframe) {
-            log(`Iframe bulundu, yönleniliyor...`);
+            log(`Iframe tespit edildi, yönleniliyor...`);
             await page.goto(iframe, { waitUntil: "domcontentloaded" });
         }
-        // Statik bekleme (12s) kaldırıldı. m3u8 gelince yukarıdaki dinleyici tetiklenecek.
       } catch (e) {
-        log(`Sayfa yükleme hatası: ${e.message}`, "ERROR");
+        log(`Navigasyon hatası: ${e.message}`, "ERROR");
       }
     });
   } catch (err) {
@@ -163,7 +163,7 @@ async function scrapeM3U8(pageUrl) {
 app.get("/proxy-stream", (req, res) => {
   const targetUrl = req.query.url;
   if (!targetUrl || !targetUrl.startsWith('http') || !targetUrl.includes('.m3u8')) {
-    return res.status(403).send("Forbidden");
+    return res.status(403).send("Geçersiz Proxy İsteği");
   }
   
   const options = { headers: { "User-Agent": CONFIG.UA, "Referer": CONFIG.BASE_URL + "/", "Origin": CONFIG.BASE_URL } };
@@ -190,22 +190,24 @@ app.get("/manifest.json", (req, res) => {
 app.get("/stream/:type/:id.json", async (req, res) => {
   const { type, id } = req.params;
   const cleanId = id.replace(".json", "");
-  log(`İstek: ${type} - ${cleanId}`);
+  log(`İstek Alındı: ${type} - ${cleanId}`);
 
   try {
     let title, dizipalUrl, streamTitle;
     const epMatch = cleanId.match(/^(tt\d+):(\d+):(\d+)$/);
 
-    if (epMatch) {
+    if (epMatch) { // Dizi
       title = await fetchTitle(epMatch[1]);
-      if (!title) throw new Error("Title yok");
+      if (!title) throw new Error("Başlık çözülemedi");
       dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
-      streamTitle = `1080p · ${title} S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')}`;
-    } else {
+      // Çözünürlük ibaresi "Auto / HD" olarak güncellendi
+      streamTitle = `Auto / HD · ${title} S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')}`;
+    } else { // Film
       title = await fetchTitle(cleanId);
-      if (!title) throw new Error("Title yok");
+      if (!title) throw new Error("Başlık çözülemedi");
       dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
-      streamTitle = `1080p · ${title}`;
+      // Çözünürlük ibaresi "Auto / HD" olarak güncellendi
+      streamTitle = `Auto / HD · ${title}`;
     }
 
     const rawM3u8 = await scrapeM3U8(dizipalUrl);
@@ -224,7 +226,7 @@ app.get("/stream/:type/:id.json", async (req, res) => {
       }]
     });
   } catch (err) {
-    log(`Hata: ${err.message}`, "ERROR");
+    log(`İşlem Hatası: ${err.message}`, "ERROR");
     res.json({ streams: [] });
   }
 });
@@ -235,5 +237,5 @@ app.use((req, res, next) => {
 });
 
 app.listen(CONFIG.PORT, "0.0.0.0", () => {
-  log(`Fusion Addon v${CONFIG.VERSION} Port ${CONFIG.PORT} aktif`);
+  log(`Fusion Addon v${CONFIG.VERSION} Port ${CONFIG.PORT} üzerinden yayında`);
 });
