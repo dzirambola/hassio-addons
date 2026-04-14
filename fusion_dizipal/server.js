@@ -1,7 +1,8 @@
 "use strict";
+
 /**
- * Fusion Dizipal Addon - v1.4.0 (Final & Stable)
- * Özellikler: Singleton Browser, Binge Group, Rich UI, Optimize Proxy
+ * Fusion Dizipal Addon - v1.4.0
+ * Singleton Browser, Range Header Support, Optimize Proxy
  */
 
 const express = require("express");
@@ -14,7 +15,6 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 
 puppeteer.use(StealthPlugin());
 
-// ── 1. Yapılandırma ─────────────────────────────────────────────────────────
 const opts = (() => {
   try { return fs.existsSync("/data/options.json") ? JSON.parse(fs.readFileSync("/data/options.json", "utf8")) : {}; } catch (e) { return {}; }
 })();
@@ -33,29 +33,35 @@ const CONFIG = {
 };
 
 const app = express();
-
-// ── 2. Singleton Browser Yönetimi ───────────────────────────────────────────
 let _browser = null;
+let _isLaunching = false;
 
+// ── 1. Singleton Browser Yönetimi ───────────────────────────────────────────
 async function getBrowser() {
   if (_browser && _browser.connected) return _browser;
   
-  log("Tarayıcı örneği başlatılıyor...");
-  _browser = await puppeteer.launch({
-    executablePath: CONFIG.CHROMIUM_PATH, // Düzeltilen Kısım
-    headless: CONFIG.HEADLESS,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote"]
-  });
-  
-  _browser.on('disconnected', () => {
-    log("Tarayıcı bağlantısı koptu.", "WARN");
-    _browser = null;
-  });
-  
+  if (_isLaunching) {
+    while (_isLaunching) { await new Promise(r => setTimeout(r, 500)); }
+    return _browser;
+  }
+
+  _isLaunching = true;
+  try {
+    log("Tarayıcı örneği başlatılıyor...");
+    _browser = await puppeteer.launch({
+      executablePath: CONFIG.CHROMIUM_PATH,
+      headless: CONFIG.HEADLESS,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote"]
+    });
+    
+    _browser.on('disconnected', () => { _browser = null; });
+  } finally {
+    _isLaunching = false;
+  }
   return _browser;
 }
 
-// ── 3. Yardımcı Fonksiyonlar & Önbellek ───────────────────────────────────────
+// ── 2. Yardımcı Fonksiyonlar & Önbellek ───────────────────────────────────────
 function log(msg, type = "INFO") {
   const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
   console.log(`[${timestamp}] [${type}] ${msg}`);
@@ -103,7 +109,7 @@ async function fetchTitle(imdbId) {
   });
 }
 
-// ── 4. Dinamik Scraper ────────────────────────────────────────────────────────
+// ── 3. Dinamik Scraper ────────────────────────────────────────────────────────
 async function scrapeM3U8(pageUrl) {
   const cached = cacheGet(`m3u8:${pageUrl}`, CONFIG.CACHE_TTL_MS);
   if (cached) return cached;
@@ -117,7 +123,7 @@ async function scrapeM3U8(pageUrl) {
 
     page.on("request", (req) => {
       const type = req.resourceType();
-      if (["image", "font", "stylesheet"].includes(type) || req.url().includes("google")) {
+      if (["image", "font", "stylesheet", "media"].includes(type) || req.url().includes("google")) {
         req.abort();
       } else {
         req.continue();
@@ -152,12 +158,20 @@ async function scrapeM3U8(pageUrl) {
   }
 }
 
-// ── 5. Proxy & Routes ──────────────────────────────────────────────────────────
+// ── 4. Proxy & Routes ──────────────────────────────────────────────────────────
 app.get("/proxy-stream", (req, res) => {
   const targetUrl = req.query.url;
   if (!targetUrl || !targetUrl.startsWith('http')) return res.status(403).send("Forbidden");
   
-  const options = { headers: { "User-Agent": CONFIG.UA, "Referer": CONFIG.BASE_URL + "/", "Origin": CONFIG.BASE_URL } };
+  const options = { 
+    headers: { 
+      "User-Agent": CONFIG.UA, 
+      "Referer": CONFIG.BASE_URL + "/", 
+      "Origin": CONFIG.BASE_URL,
+      ...(req.headers.range && { "Range": req.headers.range }) // Apple TV Fix
+    } 
+  };
+  
   const pReq = (targetUrl.startsWith('https') ? https : http).get(targetUrl, options, (pRes) => {
     res.writeHead(pRes.statusCode, pRes.headers);
     pRes.pipe(res);
@@ -173,7 +187,9 @@ app.get("/manifest.json", (req, res) => {
     logo: CONFIG.LOGO_URL,
     resources: ["stream"],
     types: ["movie", "series"],
-    idPrefixes: ["tt"]
+    idPrefixes: ["tt", "dizipal"],
+    catalogs: [],
+    behaviorHints: { configurable: false, configurationRequired: false }
   });
 });
 
