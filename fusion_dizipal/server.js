@@ -2,7 +2,7 @@
 
 /**
  * Fusion Dizipal Addon - v1.4.2
- * Singleton Browser, Range Header Support, Optimize Proxy
+ * Singleton Browser, Range Header Support, Optimize Proxy, Security Fix
  */
 
 const express = require("express");
@@ -34,7 +34,7 @@ const CONFIG = {
 
 const app = express();
 
-// 🚨 CORS Middleware DÜZELTMESİ: Rotalardan önceye alındı
+// 🚀 CORS Middleware (Öncelikli)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   next();
@@ -43,24 +43,27 @@ app.use((req, res, next) => {
 let _browser = null;
 let _isLaunching = false;
 
-// ── 1. Singleton Browser Yönetimi ───────────────────────────────────────────
 async function getBrowser() {
   if (_browser && _browser.connected) return _browser;
-  
   if (_isLaunching) {
     while (_isLaunching) { await new Promise(r => setTimeout(r, 500)); }
     return _browser;
   }
-
   _isLaunching = true;
   try {
     log("Tarayıcı örneği başlatılıyor...");
     _browser = await puppeteer.launch({
       executablePath: CONFIG.CHROMIUM_PATH,
       headless: CONFIG.HEADLESS,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote"]
+      args: [
+        "--no-sandbox", 
+        "--disable-setuid-sandbox", 
+        "--disable-dev-shm-usage", 
+        "--no-zygote",
+        "--disable-gpu",
+        "--disable-software-rasterizer"
+      ]
     });
-    
     _browser.on('disconnected', () => { _browser = null; });
   } finally {
     _isLaunching = false;
@@ -68,7 +71,6 @@ async function getBrowser() {
   return _browser;
 }
 
-// ── 2. Yardımcı Fonksiyonlar & Önbellek ───────────────────────────────────────
 function log(msg, type = "INFO") {
   const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
   console.log(`[${timestamp}] [${type}] ${msg}`);
@@ -116,7 +118,6 @@ async function fetchTitle(imdbId) {
   });
 }
 
-// ── 3. Dinamik Scraper ────────────────────────────────────────────────────────
 async function scrapeM3U8(pageUrl) {
   const cached = cacheGet(`m3u8:${pageUrl}`, CONFIG.CACHE_TTL_MS);
   if (cached) return cached;
@@ -127,7 +128,6 @@ async function scrapeM3U8(pageUrl) {
   try {
     await page.setExtraHTTPHeaders({ "Referer": CONFIG.BASE_URL + "/" });
     await page.setRequestInterception(true);
-
     page.on("request", (req) => {
       const type = req.resourceType();
       if (["image", "font", "stylesheet", "media"].includes(type) || req.url().includes("google")) {
@@ -165,7 +165,6 @@ async function scrapeM3U8(pageUrl) {
   }
 }
 
-// ── 4. Proxy & Routes ──────────────────────────────────────────────────────────
 app.get("/proxy-stream", (req, res) => {
   const targetUrl = req.query.url;
   if (!targetUrl || !targetUrl.startsWith('http')) return res.status(403).send("Forbidden");
@@ -175,7 +174,7 @@ app.get("/proxy-stream", (req, res) => {
       "User-Agent": CONFIG.UA, 
       "Referer": CONFIG.BASE_URL + "/", 
       "Origin": CONFIG.BASE_URL,
-      ...(req.headers.range && { "Range": req.headers.range }) // Apple TV Fix
+      ...(req.headers.range && { "Range": req.headers.range })
     } 
   };
   
@@ -186,11 +185,9 @@ app.get("/proxy-stream", (req, res) => {
 
   pReq.on('error', () => res.sendStatus(500));
 
-  // 🚨 PROXY "SOCKET HANG" DÜZELTMESİ: İstemci ayrıldığında proxy isteğini iptal et
+  // 🚨 Socket Hang Fix: İstemci ayrıldığında proxy isteğini yok et
   req.on('close', () => {
-    if (!pReq.destroyed) {
-      pReq.destroy();
-    }
+    if (!pReq.destroyed) pReq.destroy();
   });
 });
 
@@ -217,12 +214,12 @@ app.get("/stream/:type/:id.json", async (req, res) => {
     let title, dizipalUrl, streamTitle;
     const epMatch = cleanId.match(/^(tt\d+):(\d+):(\d+)$/);
 
-    if (epMatch) { // Dizi
+    if (epMatch) { 
       title = await fetchTitle(epMatch[1]);
       if (!title) throw new Error("Title yok");
       dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
       streamTitle = `📺 Dizi Bölümü\n⚙️ Kalite: Auto / HD\n🎬 ${title} (S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')})`;
-    } else { // Film
+    } else { 
       title = await fetchTitle(cleanId);
       if (!title) throw new Error("Title yok");
       dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
