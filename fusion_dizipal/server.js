@@ -2,7 +2,7 @@
 
 /**
  * Fusion Dizipal Addon - v1.4.2
- * Singleton Browser, Range Header Support, Optimize Proxy, Security Fix
+ * Singleton Browser, Range Header Support, Finally Page Close Fix
  */
 
 const express = require("express");
@@ -34,7 +34,6 @@ const CONFIG = {
 
 const app = express();
 
-// 🚀 CORS Middleware (Öncelikli)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   next();
@@ -55,14 +54,7 @@ async function getBrowser() {
     _browser = await puppeteer.launch({
       executablePath: CONFIG.CHROMIUM_PATH,
       headless: CONFIG.HEADLESS,
-      args: [
-        "--no-sandbox", 
-        "--disable-setuid-sandbox", 
-        "--disable-dev-shm-usage", 
-        "--no-zygote",
-        "--disable-gpu",
-        "--disable-software-rasterizer"
-      ]
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote", "--disable-gpu"]
     });
     _browser.on('disconnected', () => { _browser = null; });
   } finally {
@@ -118,6 +110,7 @@ async function fetchTitle(imdbId) {
   });
 }
 
+// ── 3. Dinamik Scraper (Finally Güncellemesi) ──────────────────────────────
 async function scrapeM3U8(pageUrl) {
   const cached = cacheGet(`m3u8:${pageUrl}`, CONFIG.CACHE_TTL_MS);
   if (cached) return cached;
@@ -137,18 +130,15 @@ async function scrapeM3U8(pageUrl) {
       }
     });
 
+    // 🚀 Promise mantığı sadeleştirildi, kapatma işlemi finally bloğuna taşındı
     return await new Promise(async (resolve, reject) => {
-      const timeout = setTimeout(() => {
-        page.close().catch(() => {});
-        reject(new Error("Zaman aşımı: Link bulunamadı."));
-      }, CONFIG.TIMEOUT_MS);
+      const timeout = setTimeout(() => reject(new Error("Zaman aşımı: Link bulunamadı.")), CONFIG.TIMEOUT_MS);
 
       page.on("request", (req) => {
         if (req.url().includes(".m3u8")) { 
             log(`Link yakalandı: ${req.url().split('?')[0]}`);
             clearTimeout(timeout); 
             cacheSet(`m3u8:${pageUrl}`, req.url());
-            page.close().catch(() => {});
             resolve(req.url()); 
         }
       });
@@ -157,11 +147,13 @@ async function scrapeM3U8(pageUrl) {
         await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
         const iframe = await page.evaluate(() => document.querySelector('iframe[src*="player"], iframe[src*="embed"]')?.src);
         if (iframe) await page.goto(iframe, { waitUntil: "domcontentloaded" });
-      } catch (e) { log(`Hata: ${e.message}`, "ERROR"); }
+      } catch (e) { log(`Navigasyon hatası (beklemeye devam ediliyor): ${e.message}`, "DEBUG"); }
     });
-  } catch (err) {
-    await page.close().catch(() => {});
-    throw err;
+  } finally {
+    // 🚨 KRİTİK: Hata olsa da olmasa da sayfa kesinlikle kapatılır
+    if (page) {
+      await page.close().catch(() => {});
+    }
   }
 }
 
@@ -184,11 +176,7 @@ app.get("/proxy-stream", (req, res) => {
   });
 
   pReq.on('error', () => res.sendStatus(500));
-
-  // 🚨 Socket Hang Fix: İstemci ayrıldığında proxy isteğini yok et
-  req.on('close', () => {
-    if (!pReq.destroyed) pReq.destroy();
-  });
+  req.on('close', () => { if (!pReq.destroyed) pReq.destroy(); });
 });
 
 app.get("/manifest.json", (req, res) => {
