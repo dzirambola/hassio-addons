@@ -1,0 +1,79 @@
+name: Release and Docker Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # ADIM 1: Versiyon Senkronizasyonu
+  sync-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.VERSION }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Update Version in Files
+        run: |
+          VERSION=${{ steps.get_version.outputs.VERSION }}
+          # manifest.json
+          jq ".version = \"$VERSION\"" manifest.json > tmp.json && mv tmp.json manifest.json
+          # config.yaml
+          sed -i "s/^version: \".*\"/version: \"$VERSION\"/" config.yaml
+          # server.js
+          sed -i "s/VERSION: \".*\"/VERSION: \"$VERSION\"/" server.js
+          # package.json
+          npm version $VERSION --no-git-tag-version
+
+      - name: Commit and Push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add manifest.json config.yaml server.js package.json
+          git commit -m "chore: bump version to ${{ steps.get_version.outputs.VERSION }} [skip ci]" || echo "No changes to commit"
+          git push origin HEAD:main
+
+  # ADIM 2: Çoklu Mimari Docker Build & Push
+  build-and-push:
+    needs: sync-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (Mimari emülasyonu için)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx (Gelişmiş build özellikleri)
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm/v7,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ needs.sync-version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
