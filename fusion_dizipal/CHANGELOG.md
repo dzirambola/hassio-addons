@@ -14,3 +14,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenecektir.
 * **Boş Yanıt (Scraping) Sorunu:** Home Assistant OS (HAOS) kısıtlı Docker ortamında Chromium'un sayfa içeriğini çekememesi sorunu, `SYS_ADMIN` yetkisi geri verilerek ve tarayıcı bayrakları (`--disable-gpu` vb.) optimize edilerek çözüldü.
 * **CORS Önceliği:** CORS middleware tanımı Express rotalarından en başa çekilerek, Stremio ve Fusion istemcilerinin tüm uç noktalara (manifest, stream) sorunsuz erişmesi sağlandı.
 * **Bellek ve Bağlantı Yönetimi:** İstemci yayından çıktığında veya videoyu ileri/geri sardığında kaynak sunucuya açık kalan bağlantıların (`Socket Hang`) otomatik olarak yok edilmesi sağlandı.
+
+### 🛠 Düzeltildi (Fixed)
+* **Bellek Sızıntısı ve Ağ Optimizasyonu:** `/proxy-stream` rotasında istemci bağlantıyı kopardığında (video kapatıldığında veya ileri sarıldığında) arka plandaki proxy isteğinin (`pReq`) ve veri akışının (`pRes`) anında iptal edilmesi sağlandı. Bu sayede RAM ve ağ bant genişliği gereksiz yere tüketilmez.
+* **Puppeteer Sayfa Kapatma Güvencesi:** `scrapeM3U8` fonksiyonuna `try...finally` bloğu eklendi. Navigasyon hatası veya zaman aşımı olsa dahi sayfanın (`page.close()`) kesinlikle kapatılması garanti altına alındı.
+* **CORS Önceliği:** CORS middleware'i en başa alınarak Stremio/Fusion erişim hataları giderildi.
+
+### 🛡️ Güvenlik (Security)
+* **SYS_ADMIN Yetkisi:** Home Assistant OS altında Chromium'un sayfa işleyebilmesi (scraping) için gerekli olan kernel yetenekleri kararlılık adına korunmuştur.
