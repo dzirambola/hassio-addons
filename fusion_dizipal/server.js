@@ -1,27 +1,31 @@
 "use strict";
 /**
- * Fusion Dizipal Addon - v1.3.1 (Optimized & Logged)
+ * Fusion Dizipal Addon - v1.3.2 (Optimized, Secured & Dynamic)
  */
 
 const express = require("express");
 const fs = require("fs");
 const https = require("https");
 const http = require("http");
-const puppeteer = require("puppeteer-extra");
+const { addExtra } = require('puppeteer-extra');
+const puppeteer = addExtra(require('puppeteer-core'));
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 
 puppeteer.use(StealthPlugin());
 
-// ── 1. Yapılandırma ──────────────────────────────────────────────────────────
+// ── 1. Yapılandırma (Home Assistant Options Entegrasyonu) ──────────────────
 const opts = (() => {
   try { return fs.existsSync("/data/options.json") ? JSON.parse(fs.readFileSync("/data/options.json", "utf8")) : {}; } catch (e) { return {}; }
 })();
 
 const CONFIG = {
-  VERSION: "1.3.1",
+  VERSION: "1.3.2",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
-  TIMEOUT_MS: 45000,
+  TIMEOUT_MS: Number(opts.timeout_ms || 45000),
+  CACHE_TTL_MS: Number(opts.cache_ttl_hours || 12) * 60 * 60 * 1000,
+  HEADLESS: opts.headless !== false ? "new" : false,
+  OMDB_KEY: opts.omdb_api_key || "trilogy",
   CHROMIUM_PATH: "/usr/bin/chromium",
   UA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   LOGO_URL: "https://raw.githubusercontent.com/dzirambola/hassio-addons/main/fusion_dizipal/image_0.png"
@@ -29,7 +33,7 @@ const CONFIG = {
 
 const app = express();
 
-// ── 2. Yardımcı Fonksiyonlar & Loglama ────────────────────────────────────────
+// ── 2. Yardımcı Fonksiyonlar & Önbellek Yönetimi ──────────────────────────────
 function log(msg, type = "INFO") {
   const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
   console.log(`[${timestamp}] [${type}] ${msg}`);
@@ -43,6 +47,15 @@ const cacheGet = (key, ttl) => {
   return e.v;
 };
 
+// Bellek Sızıntısı Koruması: Her saat başı süresi dolan cache'leri temizle
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of cache.entries()) {
+    const ttl = key.startsWith('m3u8') ? CONFIG.CACHE_TTL_MS : 7 * 24 * 60 * 60 * 1000;
+    if (now - value.t > ttl) cache.delete(key);
+  }
+}, 3600000);
+
 function toSlug(title) {
   return title.toLowerCase()
     .replace(/ğ/g,"g").replace(/ü/g,"u").replace(/ş/g,"s")
@@ -54,7 +67,7 @@ async function fetchTitle(imdbId) {
   const cached = cacheGet(`title:${imdbId}`, 7 * 24 * 60 * 60 * 1000);
   if (cached) return cached;
   return new Promise((resolve) => {
-    https.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=trilogy`, (res) => {
+    https.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=${CONFIG.OMDB_KEY}`, (res) => {
       let d = ""; res.on("data", (c) => d += c);
       res.on("end", () => {
         try { 
@@ -69,10 +82,10 @@ async function fetchTitle(imdbId) {
   });
 }
 
-// ── 3. Scraper (Gelişmiş Filtreleme Uygulandı) ─────────────────────────────────
+// ── 3. Scraper ────────────────────────────────────────────────────────────────
 async function scrapeM3U8(pageUrl) {
   log(`Kazıma işlemi başlatıldı: ${pageUrl}`);
-  const cached = cacheGet(`m3u8:${pageUrl}`, 12 * 60 * 60 * 1000);
+  const cached = cacheGet(`m3u8:${pageUrl}`, CONFIG.CACHE_TTL_MS);
   if (cached) {
     log("İçerik cache'den getirildi.");
     return cached;
@@ -80,7 +93,7 @@ async function scrapeM3U8(pageUrl) {
 
   const browser = await puppeteer.launch({
     executablePath: CONFIG.CHROMIUM_PATH,
-    headless: "new",
+    headless: CONFIG.HEADLESS,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote"]
   });
 
@@ -89,16 +102,12 @@ async function scrapeM3U8(pageUrl) {
     await page.setExtraHTTPHeaders({ "Referer": CONFIG.BASE_URL + "/" });
     await page.setRequestInterception(true);
 
-    // ── 6. Düzeltme: Gelişmiş Reklam ve Gereksiz İstek Filtreleme ──────────────
     page.on("request", (req) => {
       const type = req.resourceType();
       const url = req.url();
       const blockList = ["analytics", "adsbygoogle", "doubleclick", "facebook", "pixel", "adserver"];
       
-      if (
-        ["image", "font", "stylesheet"].includes(type) || 
-        blockList.some(domain => url.includes(domain))
-      ) {
+      if (["image", "font", "stylesheet"].includes(type) || blockList.some(domain => url.includes(domain))) {
         req.abort();
       } else {
         req.continue();
@@ -124,10 +133,10 @@ async function scrapeM3U8(pageUrl) {
         await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
         const iframe = await page.evaluate(() => document.querySelector('iframe[src*="player"], iframe[src*="embed"]')?.src);
         if (iframe) {
-            log(`Iframe bulundu, yönleniliyor: ${iframe.substring(0, 50)}...`);
+            log(`Iframe bulundu, yönleniliyor...`);
             await page.goto(iframe, { waitUntil: "domcontentloaded" });
         }
-        await new Promise(r => setTimeout(r, 12000)); // Player'ın yüklenmesi için bekleme
+        await new Promise(r => setTimeout(r, 12000));
       } catch (e) {
         log(`Sayfa yükleme hatası: ${e.message}`, "ERROR");
       }
@@ -138,10 +147,15 @@ async function scrapeM3U8(pageUrl) {
   }
 }
 
-// ── 4. Proxy ─────────────────────────────────────────────────────────────────────
+// ── 4. Proxy (SSRF Güvenliği Eklenmiş) ──────────────────────────────────────────
 app.get("/proxy-stream", (req, res) => {
   const targetUrl = req.query.url;
-  if (!targetUrl) return res.sendStatus(400);
+  
+  // Güvenlik Kontrolü: URL mevcut mu, http ile mi başlıyor ve m3u8 içeriyor mu?
+  if (!targetUrl || !targetUrl.startsWith('http') || !targetUrl.includes('.m3u8')) {
+    log(`Güvenlik: Geçersiz proxy isteği engellendi: ${targetUrl}`, "WARN");
+    return res.status(403).send("Forbidden");
+  }
   
   log(`Proxy isteği: ${targetUrl.split('?')[0]}`);
   const options = { headers: { "User-Agent": CONFIG.UA, "Referer": CONFIG.BASE_URL + "/", "Origin": CONFIG.BASE_URL } };
