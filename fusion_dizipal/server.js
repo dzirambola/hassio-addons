@@ -1,6 +1,7 @@
 "use strict";
 /**
- * Fusion Dizipal Addon - v1.3.5 (Rich UI, Singleton Browser & Binge Support)
+ * Fusion Dizipal Addon - v1.3.6 (Final & Stable)
+ * Özellikler: Singleton Browser, Binge Group, Rich UI, Optimize Proxy
  */
 
 const express = require("express");
@@ -19,7 +20,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.3.5",
+  VERSION: "1.3.6",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: Number(opts.timeout_ms || 45000),
@@ -41,7 +42,7 @@ async function getBrowser() {
   
   log("Tarayıcı örneği başlatılıyor...");
   _browser = await puppeteer.launch({
-    executable_Path: CONFIG.CHROMIUM_PATH,
+    executablePath: CONFIG.CHROMIUM_PATH, // Düzeltilen Kısım
     headless: CONFIG.HEADLESS,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote"]
   });
@@ -189,13 +190,11 @@ app.get("/stream/:type/:id.json", async (req, res) => {
       title = await fetchTitle(epMatch[1]);
       if (!title) throw new Error("Title yok");
       dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
-      // Çok satırlı profesyonel başlık
       streamTitle = `📺 Dizi Bölümü\n⚙️ Kalite: Auto / HD\n🎬 ${title} (S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')})`;
     } else { // Film
       title = await fetchTitle(cleanId);
       if (!title) throw new Error("Title yok");
       dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
-      // Çok satırlı profesyonel başlık
       streamTitle = `🎥 Sinema Filmi\n⚙️ Kalite: Auto / HD\n🎬 ${title}`;
     }
 
@@ -211,7 +210,6 @@ app.get("/stream/:type/:id.json", async (req, res) => {
         url: proxiedUrl,
         behaviorHints: { 
             notWebReady: true,
-            // Otomatik sonraki bölüm desteği
             bingeGroup: `dizipal-binge-${cleanId.split(':')[0]}`,
             proxyHeaders: { request: { "User-Agent": CONFIG.UA, "Referer": CONFIG.BASE_URL + "/" } }
         }
