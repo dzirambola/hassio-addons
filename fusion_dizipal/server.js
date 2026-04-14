@@ -2,7 +2,7 @@
 
 /**
  * Fusion Dizipal Addon - v1.4.2
- * Singleton Browser, Range Header Support, Finally Page Close Fix
+ * Singleton Browser, Range Header Support, Finally Page Close & Socket Fix
  */
 
 const express = require("express");
@@ -34,6 +34,7 @@ const CONFIG = {
 
 const app = express();
 
+// 🚀 CORS Middleware (Manifest ve Stream erişimi için en başta olmalı)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   next();
@@ -110,7 +111,6 @@ async function fetchTitle(imdbId) {
   });
 }
 
-// ── 3. Dinamik Scraper (Finally Güncellemesi) ──────────────────────────────
 async function scrapeM3U8(pageUrl) {
   const cached = cacheGet(`m3u8:${pageUrl}`, CONFIG.CACHE_TTL_MS);
   if (cached) return cached;
@@ -130,7 +130,6 @@ async function scrapeM3U8(pageUrl) {
       }
     });
 
-    // 🚀 Promise mantığı sadeleştirildi, kapatma işlemi finally bloğuna taşındı
     return await new Promise(async (resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("Zaman aşımı: Link bulunamadı.")), CONFIG.TIMEOUT_MS);
 
@@ -147,13 +146,11 @@ async function scrapeM3U8(pageUrl) {
         await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
         const iframe = await page.evaluate(() => document.querySelector('iframe[src*="player"], iframe[src*="embed"]')?.src);
         if (iframe) await page.goto(iframe, { waitUntil: "domcontentloaded" });
-      } catch (e) { log(`Navigasyon hatası (beklemeye devam ediliyor): ${e.message}`, "DEBUG"); }
+      } catch (e) { log(`Navigasyon uyarısı: ${e.message}`, "DEBUG"); }
     });
   } finally {
-    // 🚨 KRİTİK: Hata olsa da olmasa da sayfa kesinlikle kapatılır
-    if (page) {
-      await page.close().catch(() => {});
-    }
+    // 🚨 Sayfa kapatma garantisi
+    if (page) await page.close().catch(() => {});
   }
 }
 
@@ -173,10 +170,17 @@ app.get("/proxy-stream", (req, res) => {
   const pReq = (targetUrl.startsWith('https') ? https : http).get(targetUrl, options, (pRes) => {
     res.writeHead(pRes.statusCode, pRes.headers);
     pRes.pipe(res);
+    
+    // 🚨 İstemci veri akışı sırasında bağlantıyı koparırsa pRes'i de yok et
+    req.on('close', () => pRes.destroy());
   });
 
   pReq.on('error', () => res.sendStatus(500));
-  req.on('close', () => { if (!pReq.destroyed) pReq.destroy(); });
+
+  // 🚨 İstemci bağlantıyı kopardığında (kapattığında veya ileri sardığında) proxy isteğini iptal et
+  req.on('close', () => {
+    if (!pReq.destroyed) pReq.destroy();
+  });
 });
 
 app.get("/manifest.json", (req, res) => {
@@ -222,7 +226,7 @@ app.get("/stream/:type/:id.json", async (req, res) => {
       streams: [{
         name: "Dizipal\nProxy",
         title: streamTitle,
-        description: `Kaynak: ${CONFIG.BASE_URL}\nİnternet hızınıza göre kalite otomatik ayarlanır.`,
+        description: `Kaynak: ${CONFIG.BASE_URL}\nKalite otomatik ayarlanır.`,
         url: proxiedUrl,
         behaviorHints: { 
             notWebReady: true,
