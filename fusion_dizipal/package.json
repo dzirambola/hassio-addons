@@ -1,6 +1,6 @@
 {
   "name": "fusion-dizipal-addon",
-  "version": "1.3.3",
+  "version": "1.3.5",
   "description": "Fusion Media Center addon – Puppeteer-based M3U8 scraper",
   "main": "server.js",
   "engines": {
