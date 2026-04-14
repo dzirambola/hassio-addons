@@ -1,14 +1,14 @@
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 LABEL maintainer="fusion-addon"
-LABEL description="Fusion Media Center – Dizipal Scraper Addon (ARM64)"
+LABEL description="Dizipal Scraper Addon - Node 20 & Bookworm"
 
-# ── Node.js 18 LTS (NodeSource) + Chromium + sistem kütüphaneleri ─────────────
+# Node.js 20 LTS + Chromium + Sistem kütüphaneleri
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends \
     nodejs \
     chromium \
@@ -24,29 +24,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     libgbm1 \
     libasound2 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
     fonts-liberation \
-    fonts-noto \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Non-root kullanıcı ────────────────────────────────────────────────────────
-RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
-    && mkdir -p /home/pptruser \
-    && chown -R pptruser:pptruser /home/pptruser
-
-# ── Uygulama ──────────────────────────────────────────────────────────────────
+# Uygulama dizini
 WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
-COPY server.js ./
-COPY manifest.json ./
-RUN chown -R pptruser:pptruser /app
+COPY . .
 
+# Non-root kullanıcı ile güvenlik artırımı
+RUN useradd -m pptruser && chown -R pptruser:pptruser /app
 USER pptruser
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD curl -sf http://localhost:7860/manifest.json || exit 1
 
 EXPOSE 7860
 CMD ["node", "server.js"]
