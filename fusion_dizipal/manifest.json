@@ -1,10 +1,15 @@
 {
   "id": "fusion.dizipal.clean",
   "name": "Dizipal",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Dizipal İçeriklerini İzleyin.",
   "logo": "https://raw.githubusercontent.com/dzirambola/hassio-addons/main/fusion_dizipal/image_0.png",
   "resources": ["stream"],
   "types": ["movie", "series"],
-  "idPrefixes": ["tt", "dizipal"]
+  "idPrefixes": ["tt", "dizipal"],
+  "catalogs": [],
+  "behaviorHints": {
+    "configurable": false,
+    "configurationRequired": false
+  }
 }
