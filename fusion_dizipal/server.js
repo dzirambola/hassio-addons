@@ -1,6 +1,6 @@
 "use strict";
 /**
- * Fusion Dizipal Addon - v1.3.6 (Final & Stable)
+ * Fusion Dizipal Addon - v1.4.0 (Final & Stable)
  * Özellikler: Singleton Browser, Binge Group, Rich UI, Optimize Proxy
  */
 
@@ -20,7 +20,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.3.6",
+  VERSION: "1.4.0",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: Number(opts.timeout_ms || 45000),
