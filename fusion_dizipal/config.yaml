@@ -2,21 +2,22 @@ name: "Dizipal"
 description: "Dizipal İçeriklerini İzleyin (v1.4.0)"
 version: "1.4.0"
 slug: "fusion_dizipal"
-url: "https://github.com/KULLANICI_ADIN/hassio-addons"
+url: "https://github.com/dzirambola/hassio-addons"
 
 panel_icon: "mdi:play-box-outline"
 panel_title: "Dizipal"
+icon: "https://raw.githubusercontent.com/dzirambola/hassio-addons/main/fusion_dizipal/image_0.png"
 
 build_from:
   aarch64: "debian:bookworm-slim"
   armv7: "debian:bookworm-slim"
   amd64: "debian:bookworm-slim"
 
-# Privileged kaldırıldı - Güvenli mod
-privileged: []
-
 ports:
   7860/tcp: 7860
+
+privileged:
+  - SYS_ADMIN
 
 options:
   base_url: "https://dizipal.im"
