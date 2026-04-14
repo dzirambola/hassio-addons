@@ -6,10 +6,5 @@
   "logo": "https://raw.githubusercontent.com/dzirambola/hassio-addons/main/fusion_dizipal/image_0.png",
   "resources": ["stream"],
   "types": ["movie", "series"],
-  "idPrefixes": ["tt", "dizipal"],
-  "catalogs": [],
-  "behaviorHints": {
-    "configurable": false,
-    "configurationRequired": false
-  }
+  "idPrefixes": ["tt", "dizipal"]
 }
