@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Fusion Dizipal Addon - v1.4.0
+ * Fusion Dizipal Addon - v1.4.1
  * Singleton Browser, Range Header Support, Optimize Proxy
  */
 
@@ -20,7 +20,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.4.0",
+  VERSION: "1.4.1",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: Number(opts.timeout_ms || 45000),
