@@ -3,7 +3,12 @@
 Bu projedeki tüm önemli değişiklikler bu dosyada belgelenecektir.
 
 
-## [1.4.2] - 2026-04-14
+## [1.4.3] - 2026-04-14
+
+### 🚀 Eklendi (Added)
+* **Gelişmiş Hata Bildirimleri:** Artık bir hata oluştuğunda (API limiti, siteye erişim sorunu vb.) Stremio/Fusion ekranında boş liste yerine "⚠️ BİLGİ" başlığıyla açıklayıcı bir hata mesajı görünecek.
+* **Log Temizliği & Performans Takibi:** Uygulama başladığında terminal otomatik temizlenir ve m3u8 link yakalama süreleri loglara yansıtılır.
+
 
 ### 🚀 Eklendi (Added)
 * **Gelişmiş Loglama:** m3u8 linkinin ne kadar sürede yakalandığı (saniye cinsinden) ve OMDb üzerinden çözümlenen gerçek film/dizi isimleri loglara eklendi.
@@ -29,3 +34,8 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenecektir.
 ### 🛠 Düzeltildi (Fixed)
 * **Proxy Kaynak Yönetimi:** İstemci yayından ayrıldığında proxy isteğiyle birlikte veri akışının da sonlandırılması sağlandı.
 * **Sayfa Kapatma Güvencesi:** Puppeteer tarafında hata oluşsa bile sayfanın kapatılması garanti altına alınarak RAM kullanımı optimize edildi.
+
+
+
+
+
