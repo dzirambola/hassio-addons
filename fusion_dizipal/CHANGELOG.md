@@ -5,6 +5,9 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenecektir.
 
 ## [1.4.2] - 2026-04-14
 
+### 🚀 Eklendi (Added)
+* **Gelişmiş Loglama:** m3u8 linkinin ne kadar sürede yakalandığı (saniye cinsinden) ve OMDb üzerinden çözümlenen gerçek film/dizi isimleri loglara eklendi.
+* **Log Temizliği:** Uygulama her başladığında veya güncellendiğinde terminaldeki eski oturum loglarını otomatik olarak temizleyen `console.clear()` mekanizması eklendi.
 
 ### 🛠 Düzeltildi (Fixed)
 * **Sayfa Yaşam Döngüsü Güvenliği:** `scrapeM3U8` fonksiyonuna `try...finally` bloğu eklendi. Bu sayede navigasyon hataları veya zaman aşımı durumlarında bile Puppeteer sayfasının (`page.close()`) kesinlikle kapatılması sağlanarak RAM sızıntısı engellendi.
@@ -22,3 +25,7 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenecektir.
 
 ### 🛡️ Güvenlik (Security)
 * **SYS_ADMIN Yetkisi:** Home Assistant OS altında Chromium'un sayfa işleyebilmesi (scraping) için gerekli olan kernel yetenekleri kararlılık adına korunmuştur.
+
+### 🛠 Düzeltildi (Fixed)
+* **Proxy Kaynak Yönetimi:** İstemci yayından ayrıldığında proxy isteğiyle birlikte veri akışının da sonlandırılması sağlandı.
+* **Sayfa Kapatma Güvencesi:** Puppeteer tarafında hata oluşsa bile sayfanın kapatılması garanti altına alınarak RAM kullanımı optimize edildi.
