@@ -10,7 +10,7 @@ Dizipal içeriklerini Fusion Media Center (Stremio uyumlu) protokolü üzerinden
  1. Home Assistant paneline gidin.
  2. **Ayarlar** > **Eklentiler** > **Eklenti Mağazası** bölümüne girin.
  3. Sağ üstteki üç noktadan **Depolar** (Repositories) seçeneğine tıklayın.
- 4. Aşağıdaki depo URL'sini ekleyin:
+ 4. Depo URL'sini ekleyin:
    https://github.com/dzirambola/hassio-addons
  5. Listede **Dizipal** eklentisini bulun ve **Yükle** butonuna basın.
  6. Kurulum bittikten sonra **Başlat** butonuna tıklayarak eklentiyi çalıştırın.
