@@ -1,6 +1,6 @@
 "use strict";
 /**
- * Fusion Dizipal Addon - v1.3.1 (Optimized, Secured & Dynamic)
+ * Fusion Dizipal Addon - v1.3.2 (Optimized, Secured & Dynamic)
  */
 
 const express = require("express");
@@ -19,7 +19,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.3.1",
+  VERSION: "1.3.2",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: Number(opts.timeout_ms || 45000),
