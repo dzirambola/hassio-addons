@@ -2,7 +2,7 @@
 
 /**
  * Fusion Dizipal Addon - v1.4.2
- * Singleton Browser, Range Header Support, Finally Page Close & Socket Fix
+ * Singleton Browser, Range Header Support, Optimized Logging & Cleanup
  */
 
 const express = require("express");
@@ -34,7 +34,7 @@ const CONFIG = {
 
 const app = express();
 
-// 🚀 CORS Middleware (Manifest ve Stream erişimi için en başta olmalı)
+// 🚀 CORS Middleware (Manifest ve Stream erişimi için en başta)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   next();
@@ -51,7 +51,7 @@ async function getBrowser() {
   }
   _isLaunching = true;
   try {
-    log("Tarayıcı örneği başlatılıyor...");
+    log("Tarayıcı örneği başlatılıyor...", "SYSTEM");
     _browser = await puppeteer.launch({
       executablePath: CONFIG.CHROMIUM_PATH,
       headless: CONFIG.HEADLESS,
@@ -113,8 +113,12 @@ async function fetchTitle(imdbId) {
 
 async function scrapeM3U8(pageUrl) {
   const cached = cacheGet(`m3u8:${pageUrl}`, CONFIG.CACHE_TTL_MS);
-  if (cached) return cached;
+  if (cached) {
+    log(`Önbellekten alındı (Cache Hit) - Tarayıcı açılmadı.`, "DEBUG");
+    return cached;
+  }
 
+  const startTime = Date.now(); // ⏱ 1. Süre ölçümü başlangıcı
   const browser = await getBrowser();
   const page = await browser.newPage();
   
@@ -135,7 +139,8 @@ async function scrapeM3U8(pageUrl) {
 
       page.on("request", (req) => {
         if (req.url().includes(".m3u8")) { 
-            log(`Link yakalandı: ${req.url().split('?')[0]}`);
+            const duration = ((Date.now() - startTime) / 1000).toFixed(1); // ⏱ 1. Süre hesaplama
+            log(`Link yakalandı: ${req.url().split('?')[0]} (${duration} saniye sürdü)`);
             clearTimeout(timeout); 
             cacheSet(`m3u8:${pageUrl}`, req.url());
             resolve(req.url()); 
@@ -149,7 +154,6 @@ async function scrapeM3U8(pageUrl) {
       } catch (e) { log(`Navigasyon uyarısı: ${e.message}`, "DEBUG"); }
     });
   } finally {
-    // 🚨 Sayfa kapatma garantisi
     if (page) await page.close().catch(() => {});
   }
 }
@@ -170,16 +174,15 @@ app.get("/proxy-stream", (req, res) => {
   const pReq = (targetUrl.startsWith('https') ? https : http).get(targetUrl, options, (pRes) => {
     res.writeHead(pRes.statusCode, pRes.headers);
     pRes.pipe(res);
-    
-    // 🚨 İstemci veri akışı sırasında bağlantıyı koparırsa pRes'i de yok et
     req.on('close', () => pRes.destroy());
   });
 
   pReq.on('error', () => res.sendStatus(500));
-
-  // 🚨 İstemci bağlantıyı kopardığında (kapattığında veya ileri sardığında) proxy isteğini iptal et
-  req.on('close', () => {
-    if (!pReq.destroyed) pReq.destroy();
+  req.on('close', () => { 
+    if (!pReq.destroyed) {
+        pReq.destroy();
+        log(`İstemci ayrıldı, proxy sonlandırıldı.`, "INFO");
+    }
   });
 });
 
@@ -200,8 +203,7 @@ app.get("/manifest.json", (req, res) => {
 app.get("/stream/:type/:id.json", async (req, res) => {
   const { type, id } = req.params;
   const cleanId = id.replace(".json", "");
-  log(`İstek: ${type} - ${cleanId}`);
-
+  
   try {
     let title, dizipalUrl, streamTitle;
     const epMatch = cleanId.match(/^(tt\d+):(\d+):(\d+)$/);
@@ -209,11 +211,13 @@ app.get("/stream/:type/:id.json", async (req, res) => {
     if (epMatch) { 
       title = await fetchTitle(epMatch[1]);
       if (!title) throw new Error("Title yok");
+      log(`İçerik Çözümlendi: ${title} (S${epMatch[2]} E${epMatch[3]})`, "INFO"); // 🎬 3. İsim logu
       dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
       streamTitle = `📺 Dizi Bölümü\n⚙️ Kalite: Auto / HD\n🎬 ${title} (S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')})`;
     } else { 
       title = await fetchTitle(cleanId);
       if (!title) throw new Error("Title yok");
+      log(`İçerik Çözümlendi: ${title}`, "INFO"); // 🎬 3. İsim logu
       dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
       streamTitle = `🎥 Sinema Filmi\n⚙️ Kalite: Auto / HD\n🎬 ${title}`;
     }
@@ -241,6 +245,11 @@ app.get("/stream/:type/:id.json", async (req, res) => {
   }
 });
 
+// 🧹 Eski logları temizleyerek başla
 app.listen(CONFIG.PORT, "0.0.0.0", () => {
-  log(`Fusion Addon v${CONFIG.VERSION} Port ${CONFIG.PORT} aktif`);
+  console.clear(); 
+  log(`=============================================`, "SYSTEM");
+  log(`Fusion Addon v${CONFIG.VERSION} Port ${CONFIG.PORT} aktif`, "SYSTEM");
+  log(`Eski oturum logları temizlendi, sistem hazır.`, "SYSTEM");
+  log(`=============================================`, "SYSTEM");
 });
