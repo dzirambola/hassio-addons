@@ -1,8 +1,8 @@
 "use strict";
 
 /**
- * Fusion Dizipal Addon - v1.4.4 (Stable)
- * HAOS Optimized & Apple Media Player Compatible
+ * Fusion Dizipal Addon - v1.4.5 (Enterprise Stable)
+ * HAOS Optimized, Memory Leak Protected & Apple Media Player Compatible
  */
 
 const express = require("express");
@@ -20,7 +20,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.4.4",
+  VERSION: "1.4.5",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: Number(opts.timeout_ms || 45000),
@@ -84,6 +84,7 @@ const cacheGet = (key, ttl) => {
   return e.v;
 };
 
+// Rutin Cache Temizliği
 setInterval(() => {
   const now = Date.now();
   for (const [key, value] of cache.entries()) {
@@ -91,6 +92,15 @@ setInterval(() => {
     if (now - value.t > ttl) cache.delete(key);
   }
 }, 3600000);
+
+// 7/24 Tarayıcı Geri Dönüşüm Mekanizması (RAM Optimizasyonu)
+setInterval(async () => {
+  if (_browser && _browser.connected) {
+    log("Rutin bakım: RAM optimizasyonu için tarayıcı instance'ı sıfırlanıyor...", "SYSTEM");
+    await _browser.close().catch(() => {});
+    _browser = null; 
+  }
+}, 12 * 60 * 60 * 1000);
 
 function toSlug(title) {
   return title.toLowerCase()
@@ -154,9 +164,9 @@ async function scrapeM3U8(pageUrl) {
       });
 
       try {
-        await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
+        await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
         const iframe = await page.evaluate(() => document.querySelector('iframe[src*="player"], iframe[src*="embed"]')?.src);
-        if (iframe) await page.goto(iframe, { waitUntil: "domcontentloaded" });
+        if (iframe) await page.goto(iframe, { waitUntil: "domcontentloaded", timeout: CONFIG.TIMEOUT_MS });
       } catch (e) { log(`Navigasyon: ${e.message}`, "DEBUG"); }
     });
   } finally {
@@ -180,7 +190,12 @@ app.get("/proxy-stream", (req, res) => {
   const pReq = (targetUrl.startsWith('https') ? https : http).get(targetUrl, options, (pRes) => {
     res.writeHead(pRes.statusCode, pRes.headers);
     pRes.pipe(res);
-    req.on('close', () => pRes.destroy());
+    
+    // Agresif Akış İmhası (Memory & Socket Bloat Prevention)
+    req.on('close', () => { 
+      pRes.destroy();
+      if (!pReq.destroyed) pReq.destroy(); 
+    });
   });
 
   pReq.setTimeout(15000, () => { pReq.destroy(); });
@@ -208,7 +223,7 @@ app.get("/manifest.json", (req, res) => {
   });
 });
 
-app.get("/stream/:type/:id.json", async (req, res) => {
+app.get("/stream/:type/:id.json", async (req, res, next) => {
   const { type, id } = req.params;
   const cleanId = id.replace(".json", "");
   
@@ -262,8 +277,38 @@ app.get("/stream/:type/:id.json", async (req, res) => {
   }
 });
 
+// Global Error Handler (Arayüz Koruması)
+app.use((err, req, res, next) => {
+  log(`Sistem Hatası Yakalandı: ${err.message}`, "ERROR");
+  if (!res.headersSent) {
+    res.json({
+      streams: [{
+        name: "⚠️ KRİTİK HATA",
+        title: "Sistem Hatası",
+        description: `Detay: ${err.message}\nEklenti loglarını kontrol edin.`,
+        url: "http://error"
+      }]
+    });
+  }
+});
+
 app.listen(CONFIG.PORT, "0.0.0.0", () => {
   log(`=============================================`, "SYSTEM");
   log(`Fusion Addon v${CONFIG.VERSION} Port ${CONFIG.PORT} aktif`, "SYSTEM");
   log(`=============================================`, "SYSTEM");
+});
+
+// Graceful Shutdown (Zombi Chromium Süreçlerini Engelleme)
+['SIGINT', 'SIGTERM', 'SIGQUIT'].forEach(signal => {
+  process.on(signal, async () => {
+    log(`${signal} sinyali alındı. Sistem güvenli bir şekilde kapatılıyor...`, "SYSTEM");
+    if (_browser) {
+      await _browser.close().catch(() => {});
+    }
+    process.exit(0);
+  });
+});
+
+process.on('uncaughtException', (err) => {
+  log(`Beklenmeyen Kritik Hata: ${err.message}`, "ERROR");
 });
