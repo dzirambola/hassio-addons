@@ -1,8 +1,8 @@
 "use strict";
 
 /**
- * Fusion Dizipal Addon - v1.4.1
- * Singleton Browser, Range Header Support, Optimize Proxy
+ * Fusion Dizipal Addon - v1.4.3
+ * Gelişmiş Hata Yakalama (Error Boundary) ve Bildirim Sistemi
  */
 
 const express = require("express");
@@ -20,7 +20,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.4.1",
+  VERSION: "1.4.3",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: Number(opts.timeout_ms || 45000),
@@ -33,27 +33,29 @@ const CONFIG = {
 };
 
 const app = express();
+
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  next();
+});
+
 let _browser = null;
 let _isLaunching = false;
 
-// ── 1. Singleton Browser Yönetimi ───────────────────────────────────────────
 async function getBrowser() {
   if (_browser && _browser.connected) return _browser;
-  
   if (_isLaunching) {
     while (_isLaunching) { await new Promise(r => setTimeout(r, 500)); }
     return _browser;
   }
-
   _isLaunching = true;
   try {
-    log("Tarayıcı örneği başlatılıyor...");
+    log("Tarayıcı örneği başlatılıyor...", "SYSTEM");
     _browser = await puppeteer.launch({
       executablePath: CONFIG.CHROMIUM_PATH,
       headless: CONFIG.HEADLESS,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote"]
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote", "--disable-gpu"]
     });
-    
     _browser.on('disconnected', () => { _browser = null; });
   } finally {
     _isLaunching = false;
@@ -61,7 +63,6 @@ async function getBrowser() {
   return _browser;
 }
 
-// ── 2. Yardımcı Fonksiyonlar & Önbellek ───────────────────────────────────────
 function log(msg, type = "INFO") {
   const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
   console.log(`[${timestamp}] [${type}] ${msg}`);
@@ -93,34 +94,33 @@ function toSlug(title) {
 async function fetchTitle(imdbId) {
   const cached = cacheGet(`title:${imdbId}`, 7 * 24 * 60 * 60 * 1000);
   if (cached) return cached;
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     https.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=${CONFIG.OMDB_KEY}`, (res) => {
       let d = ""; res.on("data", (c) => d += c);
       res.on("end", () => {
         try { 
             const j = JSON.parse(d); 
-            if (j.Title) { 
+            if (j.Response === "True") { 
                 cacheSet(`title:${imdbId}`, j.Title); 
                 resolve(j.Title); 
-            } else resolve(null); 
-        } catch (e) { resolve(null); }
+            } else reject(new Error(j.Error || "API Hatası")); 
+        } catch (e) { reject(new Error("JSON Ayrıştırma Hatası")); }
       });
-    }).on("error", () => resolve(null));
+    }).on("error", () => reject(new Error("OMDb Bağlantı Hatası")));
   });
 }
 
-// ── 3. Dinamik Scraper ────────────────────────────────────────────────────────
 async function scrapeM3U8(pageUrl) {
   const cached = cacheGet(`m3u8:${pageUrl}`, CONFIG.CACHE_TTL_MS);
   if (cached) return cached;
 
+  const startTime = Date.now();
   const browser = await getBrowser();
   const page = await browser.newPage();
   
   try {
     await page.setExtraHTTPHeaders({ "Referer": CONFIG.BASE_URL + "/" });
     await page.setRequestInterception(true);
-
     page.on("request", (req) => {
       const type = req.resourceType();
       if (["image", "font", "stylesheet", "media"].includes(type) || req.url().includes("google")) {
@@ -131,17 +131,14 @@ async function scrapeM3U8(pageUrl) {
     });
 
     return await new Promise(async (resolve, reject) => {
-      const timeout = setTimeout(() => {
-        page.close().catch(() => {});
-        reject(new Error("Zaman aşımı: Link bulunamadı."));
-      }, CONFIG.TIMEOUT_MS);
+      const timeout = setTimeout(() => reject(new Error("Zaman aşımı: Yayın linki bulunamadı.")), CONFIG.TIMEOUT_MS);
 
       page.on("request", (req) => {
         if (req.url().includes(".m3u8")) { 
-            log(`Link yakalandı: ${req.url().split('?')[0]}`);
+            const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+            log(`Link yakalandı: ${req.url().split('?')[0]} (${duration}s)`);
             clearTimeout(timeout); 
             cacheSet(`m3u8:${pageUrl}`, req.url());
-            page.close().catch(() => {});
             resolve(req.url()); 
         }
       });
@@ -150,15 +147,13 @@ async function scrapeM3U8(pageUrl) {
         await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
         const iframe = await page.evaluate(() => document.querySelector('iframe[src*="player"], iframe[src*="embed"]')?.src);
         if (iframe) await page.goto(iframe, { waitUntil: "domcontentloaded" });
-      } catch (e) { log(`Hata: ${e.message}`, "ERROR"); }
+      } catch (e) { log(`Navigasyon uyarısı: ${e.message}`, "DEBUG"); }
     });
-  } catch (err) {
-    await page.close().catch(() => {});
-    throw err;
+  } finally {
+    if (page) await page.close().catch(() => {});
   }
 }
 
-// ── 4. Proxy & Routes ──────────────────────────────────────────────────────────
 app.get("/proxy-stream", (req, res) => {
   const targetUrl = req.query.url;
   if (!targetUrl || !targetUrl.startsWith('http')) return res.status(403).send("Forbidden");
@@ -168,15 +163,18 @@ app.get("/proxy-stream", (req, res) => {
       "User-Agent": CONFIG.UA, 
       "Referer": CONFIG.BASE_URL + "/", 
       "Origin": CONFIG.BASE_URL,
-      ...(req.headers.range && { "Range": req.headers.range }) // Apple TV Fix
+      ...(req.headers.range && { "Range": req.headers.range })
     } 
   };
   
   const pReq = (targetUrl.startsWith('https') ? https : http).get(targetUrl, options, (pRes) => {
     res.writeHead(pRes.statusCode, pRes.headers);
     pRes.pipe(res);
+    req.on('close', () => pRes.destroy());
   });
+
   pReq.on('error', () => res.sendStatus(500));
+  req.on('close', () => { if (!pReq.destroyed) pReq.destroy(); });
 });
 
 app.get("/manifest.json", (req, res) => {
@@ -196,22 +194,21 @@ app.get("/manifest.json", (req, res) => {
 app.get("/stream/:type/:id.json", async (req, res) => {
   const { type, id } = req.params;
   const cleanId = id.replace(".json", "");
-  log(`İstek: ${type} - ${cleanId}`);
-
+  
   try {
     let title, dizipalUrl, streamTitle;
     const epMatch = cleanId.match(/^(tt\d+):(\d+):(\d+)$/);
 
-    if (epMatch) { // Dizi
+    if (epMatch) { 
       title = await fetchTitle(epMatch[1]);
-      if (!title) throw new Error("Title yok");
+      log(`İçerik: ${title} (S${epMatch[2]} E${epMatch[3]})`);
       dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
-      streamTitle = `📺 Dizi Bölümü\n⚙️ Kalite: Auto / HD\n🎬 ${title} (S${epMatch[2].padStart(2, '0')}E${epMatch[3].padStart(2, '0')})`;
-    } else { // Film
+      streamTitle = `📺 Dizi: ${title} S${epMatch[2]}E${epMatch[3]}`;
+    } else { 
       title = await fetchTitle(cleanId);
-      if (!title) throw new Error("Title yok");
+      log(`İçerik: ${title}`);
       dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
-      streamTitle = `🎥 Sinema Filmi\n⚙️ Kalite: Auto / HD\n🎬 ${title}`;
+      streamTitle = `🎥 Film: ${title}`;
     }
 
     const rawM3u8 = await scrapeM3U8(dizipalUrl);
@@ -222,7 +219,7 @@ app.get("/stream/:type/:id.json", async (req, res) => {
       streams: [{
         name: "Dizipal\nProxy",
         title: streamTitle,
-        description: `Kaynak: ${CONFIG.BASE_URL}\nİnternet hızınıza göre kalite otomatik ayarlanır.`,
+        description: `Kaynak: ${CONFIG.BASE_URL}\nKalite otomatik ayarlanır.`,
         url: proxiedUrl,
         behaviorHints: { 
             notWebReady: true,
@@ -232,16 +229,27 @@ app.get("/stream/:type/:id.json", async (req, res) => {
       }]
     });
   } catch (err) {
-    log(`Hata: ${err.message}`, "ERROR");
-    res.json({ streams: [] });
+    log(`HATA: ${err.message}`, "ERROR");
+    
+    // 🚨 Hata durumunda kullanıcıya gösterilecek sahte stream objesi
+    let userMsg = "HATA: Link bulunamadı.";
+    if (err.message.includes("API")) userMsg = "HATA: API Limiti Doldu (OMDb).";
+    if (err.message.includes("Zaman aşımı")) userMsg = "HATA: Siteye Erişilemiyor.";
+
+    res.json({
+      streams: [{
+        name: "⚠️ BİLGİ",
+        title: userMsg,
+        description: `Detay: ${err.message}\nLütfen daha sonra tekrar deneyin veya ayarlarınızı kontrol edin.`,
+        url: "http://error" // Oynatılamaz boş link
+      }]
+    });
   }
 });
 
-app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  next();
-});
-
 app.listen(CONFIG.PORT, "0.0.0.0", () => {
-  log(`Fusion Addon v${CONFIG.VERSION} Port ${CONFIG.PORT} aktif`);
+  console.clear(); 
+  log(`=============================================`, "SYSTEM");
+  log(`Fusion Addon v${CONFIG.VERSION} Port ${CONFIG.PORT} aktif`, "SYSTEM");
+  log(`=============================================`, "SYSTEM");
 });

@@ -2,26 +2,40 @@
 
 Bu projedeki tüm önemli değişiklikler bu dosyada belgelenecektir.
 
-## [1.4.1] - 2026-04-14
 
-Bu sürüm; altyapı modernizasyonu, Apple ekosistemi uyumluluğu ve sistem kararlılığına odaklanan kapsamlı bir güncellemedir.
+## [1.4.3] - 2026-04-14
 
 ### 🚀 Eklendi (Added)
-* **Apple TV ve iPad Pro Desteği:** Dahili proxy rotasına (`/proxy-stream`) HTTP `Range` (byte-range) başlığı desteği eklendi. Bu sayede Apple cihazlarındaki katı medya oynatıcılarında videoyu ileri/geri sarma (seeking) sorunsuz hale getirildi.
-* **Race Condition (Yarış Durumu) Kilidi:** Puppeteer'ın aynı anda gelen çoklu isteklerde birden fazla Chromium instance'ı açarak RAM'i tüketmesini engelleyen "Singleton Browser Lock" mekanizması eklendi.
-* **Zombi Süreç Yönetimi:** Docker konteynerine `dumb-init` eklenerek, arka planda açık kalan yetim (orphan) Chromium süreçlerinin otomatik temizlenmesi sağlandı.
+* **Gelişmiş Hata Bildirimleri:** Artık bir hata oluştuğunda (API limiti, siteye erişim sorunu vb.) Stremio/Fusion ekranında boş liste yerine "⚠️ BİLGİ" başlığıyla açıklayıcı bir hata mesajı görünecek.
+* **Log Temizliği & Performans Takibi:** Uygulama başladığında terminal otomatik temizlenir ve m3u8 link yakalama süreleri loglara yansıtılır.
 
-### 🔄 Değiştirildi (Changed)
-* **İşletim Sistemi Tabanı:** Docker imajı `debian:bullseye-slim` sürümünden, daha modern kütüphanelere sahip olan `debian:bookworm-slim` sürümüne yükseltildi.
-* **Node.js Sürümü:** Uygulama çalışma ortamı Node 18 LTS'den **Node 20 LTS** sürümüne taşınarak performans ve bellek yönetimi iyileştirildi.
+
+### 🚀 Eklendi (Added)
+* **Gelişmiş Loglama:** m3u8 linkinin ne kadar sürede yakalandığı (saniye cinsinden) ve OMDb üzerinden çözümlenen gerçek film/dizi isimleri loglara eklendi.
+* **Log Temizliği:** Uygulama her başladığında veya güncellendiğinde terminaldeki eski oturum loglarını otomatik olarak temizleyen `console.clear()` mekanizması eklendi.
 
 ### 🛠 Düzeltildi (Fixed)
-* Ağ bağlantısı koptuğunda veya zaman aşımı oluştuğunda tarayıcının kilitli kalma sorunu giderildi.
-* İstemci ve kaynak sunucu arasındaki başlık (header) senkronizasyonu iyileştirildi.
+* **Sayfa Yaşam Döngüsü Güvenliği:** `scrapeM3U8` fonksiyonuna `try...finally` bloğu eklendi. Bu sayede navigasyon hataları veya zaman aşımı durumlarında bile Puppeteer sayfasının (`page.close()`) kesinlikle kapatılması sağlanarak RAM sızıntısı engellendi.
+* **Hata Yönetimi:** Navigasyon sırasında oluşan küçük hataların link yakalama sürecini tamamen bozması engellendi; hata olsa dahi m3u8 isteğinin gelmesi için beklemeye devam ediliyor.
+
+## 🛠 Düzeltildi (Fixed)
+* **Boş Yanıt (Scraping) Sorunu:** Home Assistant OS (HAOS) kısıtlı Docker ortamında Chromium'un sayfa içeriğini çekememesi sorunu, `SYS_ADMIN` yetkisi geri verilerek ve tarayıcı bayrakları (`--disable-gpu` vb.) optimize edilerek çözüldü.
+* **CORS Önceliği:** CORS middleware tanımı Express rotalarından en başa çekilerek, Stremio ve Fusion istemcilerinin tüm uç noktalara (manifest, stream) sorunsuz erişmesi sağlandı.
+* **Bellek ve Bağlantı Yönetimi:** İstemci yayından çıktığında veya videoyu ileri/geri sardığında kaynak sunucuya açık kalan bağlantıların (`Socket Hang`) otomatik olarak yok edilmesi sağlandı.
+
+### 🛠 Düzeltildi (Fixed)
+* **Bellek Sızıntısı ve Ağ Optimizasyonu:** `/proxy-stream` rotasında istemci bağlantıyı kopardığında (video kapatıldığında veya ileri sarıldığında) arka plandaki proxy isteğinin (`pReq`) ve veri akışının (`pRes`) anında iptal edilmesi sağlandı. Bu sayede RAM ve ağ bant genişliği gereksiz yere tüketilmez.
+* **Puppeteer Sayfa Kapatma Güvencesi:** `scrapeM3U8` fonksiyonuna `try...finally` bloğu eklendi. Navigasyon hatası veya zaman aşımı olsa dahi sayfanın (`page.close()`) kesinlikle kapatılması garanti altına alındı.
+* **CORS Önceliği:** CORS middleware'i en başa alınarak Stremio/Fusion erişim hataları giderildi.
 
 ### 🛡️ Güvenlik (Security)
-* **İzolasyon Katmanları:** Dockerfile içerisinde uygulama root olmayan (`pptruser`) bir kullanıcıya taşındı.
-* **Home Assistant Uyumluluğu:** Home Assistant Supervisor'ın katı AppArmor ve Seccomp profilleriyle tam uyum sağlamak ve Chromium'un çökmesini engellemek adına `privileged: [SYS_ADMIN]` yetkisi (kontrollü olarak) korunmuştur.
+* **SYS_ADMIN Yetkisi:** Home Assistant OS altında Chromium'un sayfa işleyebilmesi (scraping) için gerekli olan kernel yetenekleri kararlılık adına korunmuştur.
 
----
-*Not: Bu sürüm, 1.3.x serisindeki kararlılık sorunlarını gidermek için yayınlanmış ilk büyük sürümdür.*
+### 🛠 Düzeltildi (Fixed)
+* **Proxy Kaynak Yönetimi:** İstemci yayından ayrıldığında proxy isteğiyle birlikte veri akışının da sonlandırılması sağlandı.
+* **Sayfa Kapatma Güvencesi:** Puppeteer tarafında hata oluşsa bile sayfanın kapatılması garanti altına alınarak RAM kullanımı optimize edildi.
+
+
+
+
+

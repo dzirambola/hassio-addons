@@ -40,6 +40,7 @@ Eklenti ayarları (Configuration) sekmesinden aşağıdaki parametreleri özelle
 | omdb_api_key | Film/Dizi meta verileri için API anahtarı. | trilogy |
 | headless | Tarayıcının arayüzsüz modda çalışması (Önerilen: true). | true |
 
+
 > [!TIP]
 > **Önemli:** `trilogy` anahtarı bazen yoğunluktan dolayı hata verebilir. Daha stabil bir deneyim için omdbapi.com adresinden ücretsiz bir API Key alarak ayarlara girmeniz tavsiye edilir.
 
