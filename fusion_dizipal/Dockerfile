@@ -1,9 +1,9 @@
 FROM debian:bookworm-slim
 
 LABEL maintainer="fusion-addon"
-LABEL description="Fusion Media Center – Dizipal Scraper Addon (v1.4.1)"
+LABEL description="Fusion Media Center – Dizipal Scraper Addon (v1.4.4)"
 
-# ── 1. Bağımlılıklar & Node.js 20 LTS (NodeSource) ───────────────────────────
+# ── 1. Bağımlılıklar & Node.js 20 LTS ───────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
@@ -31,23 +31,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto \
     && rm -rf /var/lib/apt/lists/*
 
-# ── 2. Güvenlik: Non-root kullanıcı (pptruser) ──────────────────────────────
-RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
-    && mkdir -p /home/pptruser \
-    && chown -R pptruser:pptruser /home/pptruser
-
-# ── 3. Uygulama Yapılandırması ────────────────────────────────────────────────
+# ── 2. Uygulama Yapılandırması ────────────────────────────────────────────────
 WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
 COPY server.js ./
 COPY manifest.json ./
-RUN chown -R pptruser:pptruser /app
 
-USER pptruser
-
-# ── 4. Sağlık Kontrolü & Başlatma ─────────────────────────────────────────────
-# dumb-init kullanımı PID 1 sorunlarını (zombi süreçleri) önler.
+# ── 3. Sağlık Kontrolü & Başlatma ─────────────────────────────────────────────
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
