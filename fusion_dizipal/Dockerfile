@@ -1,7 +1,7 @@
 FROM debian:bookworm-slim
 
 LABEL maintainer="fusion-addon"
-LABEL description="Fusion Media Center – Dizipal Scraper Addon (v1.4.4)"
+LABEL description="Fusion Media Center – Dizipal Scraper Addon (v1.4.5)"
 
 # ── 1. Bağımlılıklar & Node.js 20 LTS ───────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
