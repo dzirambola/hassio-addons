@@ -1,8 +1,8 @@
 "use strict";
 
 /**
- * Fusion Dizipal Addon - v1.4.3
- * Gelişmiş Hata Yakalama (Error Boundary) ve Bildirim Sistemi
+ * Fusion Dizipal Addon - v1.4.4 (Stable)
+ * HAOS Optimized & Apple Media Player Compatible
  */
 
 const express = require("express");
@@ -20,7 +20,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.4.3",
+  VERSION: "1.4.4",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: Number(opts.timeout_ms || 45000),
@@ -34,8 +34,16 @@ const CONFIG = {
 
 const app = express();
 
+// Gelişmiş CORS ve Apple Player Uyumluluğu
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
+  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  res.setHeader("Access-Control-Expose-Headers", "Accept-Ranges, Content-Encoding, Content-Length, Content-Range");
+  
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
   next();
 });
 
@@ -46,7 +54,7 @@ async function getBrowser() {
   if (_browser && _browser.connected) return _browser;
   if (_isLaunching) {
     while (_isLaunching) { await new Promise(r => setTimeout(r, 500)); }
-    return _browser;
+    return getBrowser(); // Recursive kontrol
   }
   _isLaunching = true;
   try {
@@ -121,12 +129,14 @@ async function scrapeM3U8(pageUrl) {
   try {
     await page.setExtraHTTPHeaders({ "Referer": CONFIG.BASE_URL + "/" });
     await page.setRequestInterception(true);
+    
     page.on("request", (req) => {
+      if (req.isInterceptResolutionHandled()) return;
       const type = req.resourceType();
       if (["image", "font", "stylesheet", "media"].includes(type) || req.url().includes("google")) {
-        req.abort();
+        req.abort().catch(() => {});
       } else {
-        req.continue();
+        req.continue().catch(() => {});
       }
     });
 
@@ -147,7 +157,7 @@ async function scrapeM3U8(pageUrl) {
         await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
         const iframe = await page.evaluate(() => document.querySelector('iframe[src*="player"], iframe[src*="embed"]')?.src);
         if (iframe) await page.goto(iframe, { waitUntil: "domcontentloaded" });
-      } catch (e) { log(`Navigasyon uyarısı: ${e.message}`, "DEBUG"); }
+      } catch (e) { log(`Navigasyon: ${e.message}`, "DEBUG"); }
     });
   } finally {
     if (page) await page.close().catch(() => {});
@@ -173,7 +183,14 @@ app.get("/proxy-stream", (req, res) => {
     req.on('close', () => pRes.destroy());
   });
 
-  pReq.on('error', () => res.sendStatus(500));
+  pReq.setTimeout(15000, () => { pReq.destroy(); });
+
+  pReq.on('error', (err) => {
+    log(`Proxy Hatası: ${err.message}`, "DEBUG");
+    if (!res.headersSent) res.sendStatus(500);
+    else res.end();
+  });
+
   req.on('close', () => { if (!pReq.destroyed) pReq.destroy(); });
 });
 
@@ -201,12 +218,12 @@ app.get("/stream/:type/:id.json", async (req, res) => {
 
     if (epMatch) { 
       title = await fetchTitle(epMatch[1]);
-      log(`İçerik: ${title} (S${epMatch[2]} E${epMatch[3]})`);
+      log(`Talep: ${title} (S${epMatch[2]} E${epMatch[3]})`);
       dizipalUrl = `${CONFIG.BASE_URL}/bolum/${toSlug(title)}-${epMatch[2]}-sezon-${epMatch[3]}-bolum-izle/`;
       streamTitle = `📺 Dizi: ${title} S${epMatch[2]}E${epMatch[3]}`;
     } else { 
       title = await fetchTitle(cleanId);
-      log(`İçerik: ${title}`);
+      log(`Talep: ${title}`);
       dizipalUrl = `${CONFIG.BASE_URL}/${toSlug(title)}/`;
       streamTitle = `🎥 Film: ${title}`;
     }
@@ -230,25 +247,22 @@ app.get("/stream/:type/:id.json", async (req, res) => {
     });
   } catch (err) {
     log(`HATA: ${err.message}`, "ERROR");
-    
-    // 🚨 Hata durumunda kullanıcıya gösterilecek sahte stream objesi
     let userMsg = "HATA: Link bulunamadı.";
-    if (err.message.includes("API")) userMsg = "HATA: API Limiti Doldu (OMDb).";
-    if (err.message.includes("Zaman aşımı")) userMsg = "HATA: Siteye Erişilemiyor.";
+    if (err.message.includes("API")) userMsg = "HATA: OMDb Limit/Key Hatası.";
+    if (err.message.includes("Zaman aşımı")) userMsg = "HATA: Kaynak Site Cevap Vermedi.";
 
     res.json({
       streams: [{
         name: "⚠️ BİLGİ",
         title: userMsg,
-        description: `Detay: ${err.message}\nLütfen daha sonra tekrar deneyin veya ayarlarınızı kontrol edin.`,
-        url: "http://error" // Oynatılamaz boş link
+        description: `Detay: ${err.message}\nLütfen ayarları kontrol edin.`,
+        url: "http://error"
       }]
     });
   }
 });
 
 app.listen(CONFIG.PORT, "0.0.0.0", () => {
-  console.clear(); 
   log(`=============================================`, "SYSTEM");
   log(`Fusion Addon v${CONFIG.VERSION} Port ${CONFIG.PORT} aktif`, "SYSTEM");
   log(`=============================================`, "SYSTEM");
