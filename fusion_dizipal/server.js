@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Fusion Dizipal Addon - v1.4.5 (Enterprise Stable)
+ * Fusion Dizipal Addon - v1.4.6 (Final / Enterprise Stable)
  * HAOS Optimized, Memory Leak Protected & Apple Media Player Compatible
  */
 
@@ -20,7 +20,7 @@ const opts = (() => {
 })();
 
 const CONFIG = {
-  VERSION: "1.4.5",
+  VERSION: "1.4.6",
   BASE_URL: opts.base_url || "https://dizipal.im",
   PORT: Number(opts.port || 7860),
   TIMEOUT_MS: Number(opts.timeout_ms || 45000),
@@ -72,7 +72,12 @@ async function getBrowser() {
 }
 
 function log(msg, type = "INFO") {
-  const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
+  // Logları Türkiye saat dilimine (HAOS UTC olsa bile) zorla
+  const timestamp = new Date().toLocaleString("tr-TR", { 
+    timeZone: "Europe/Istanbul",
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
   console.log(`[${timestamp}] [${type}] ${msg}`);
 }
 
@@ -93,12 +98,20 @@ setInterval(() => {
   }
 }, 3600000);
 
-// 7/24 Tarayıcı Geri Dönüşüm Mekanizması (RAM Optimizasyonu)
+// 7/24 Tarayıcı Geri Dönüşüm Mekanizması (RAM Optimizasyonu & Çatışma Koruması)
 setInterval(async () => {
   if (_browser && _browser.connected) {
-    log("Rutin bakım: RAM optimizasyonu için tarayıcı instance'ı sıfırlanıyor...", "SYSTEM");
-    await _browser.close().catch(() => {});
-    _browser = null; 
+    try {
+      const pages = await _browser.pages();
+      // about:blank dışında sayfa varsa aktif bir işlem (örneğin film arama) vardır, atla.
+      if (pages.length > 1) {
+        log("Aktif işlem tespit edildi, RAM optimizasyonu ertelendi.", "SYSTEM");
+        return; 
+      }
+      log("Rutin bakım: RAM optimizasyonu için tarayıcı instance'ı sıfırlanıyor...", "SYSTEM");
+      await _browser.close().catch(() => {});
+      _browser = null; 
+    } catch (e) {}
   }
 }, 12 * 60 * 60 * 1000);
 
@@ -178,11 +191,14 @@ app.get("/proxy-stream", (req, res) => {
   const targetUrl = req.query.url;
   if (!targetUrl || !targetUrl.startsWith('http')) return res.status(403).send("Forbidden");
   
+  // Hedef CDN'in kök domainini dinamik al
+  const targetOrigin = new URL(targetUrl).origin;
+
   const options = { 
     headers: { 
       "User-Agent": CONFIG.UA, 
       "Referer": CONFIG.BASE_URL + "/", 
-      "Origin": CONFIG.BASE_URL,
+      "Origin": targetOrigin, // Dinamik CDN adresi (403 engelleme)
       ...(req.headers.range && { "Range": req.headers.range })
     } 
   };
@@ -191,11 +207,8 @@ app.get("/proxy-stream", (req, res) => {
     res.writeHead(pRes.statusCode, pRes.headers);
     pRes.pipe(res);
     
-    // Agresif Akış İmhası (Memory & Socket Bloat Prevention)
-    req.on('close', () => { 
-      pRes.destroy();
-      if (!pReq.destroyed) pReq.destroy(); 
-    });
+    // Yalnızca akış hatalarında veya bitişte pRes'i temizle
+    pRes.on('error', () => { if (!pRes.destroyed) pRes.destroy(); });
   });
 
   pReq.setTimeout(15000, () => { pReq.destroy(); });
@@ -206,7 +219,10 @@ app.get("/proxy-stream", (req, res) => {
     else res.end();
   });
 
-  req.on('close', () => { if (!pReq.destroyed) pReq.destroy(); });
+  // İstemci koptuğunda HER ŞEYİ tek bir yerden imha et (MaxListeners sızıntısını önler)
+  req.on('close', () => { 
+    if (!pReq.destroyed) pReq.destroy(); 
+  });
 });
 
 app.get("/manifest.json", (req, res) => {
